@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+model/*/weights/
+model/*/outputs/
+model/*/config.json
+
+output/
+.DS_Store

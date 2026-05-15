@@ -1,0 +1,38 @@
+# Default editable pipeline configuration.
+# Friends should usually copy this file, edit the copy, then pass it with:
+#   ./run_main.sh --config configs/my_experiment.toml
+#   ./run_visualize.sh --config configs/my_experiment.toml --experiment-name <name>
+
+[train]
+dataset = "dataset_drac"      # "dataset_tu", "dataset_drac", "tu", or "drac"
+augment = true
+aug_multiplier = 10
+base_dir = "."
+k_folds = 5
+epochs = 100
+batch_size = 8
+lr = 0.0001
+use_amp = true
+use_scheduler = true
+scheduler_factor = 0.5
+scheduler_patience = 3
+min_lr = 0.0000001
+patience = 30
+num_workers = 0
+threshold = 0.5
+seed = 42
+model_root = "model"
+required_conda_env = ""        # Optional. Set to your conda preference only if you want to enforce that env.
+experiment_name = ""          # Empty string means auto-generate from config.
+
+[visualize]
+dataset = "dataset_drac"
+base_dir = "."
+k_folds = 5
+batch_size = 8
+threshold = 0.5
+use_amp = true
+model_root = "model"
+experiment_name = ""          # Empty string means auto-generate from config.
+required_conda_env = ""        # Optional. Set to "eeg" only if you want to enforce that env.
+max_images_per_fold = 0       # 0 means visualize all test images.
