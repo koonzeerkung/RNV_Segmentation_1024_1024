@@ -10,6 +10,8 @@ For friends running this pipeline, use these files:
 - `configs/colab.toml`: Google Colab example config.
 - `run_main.sh`: runs training, optionally activating a conda env if `PIPELINE_CONDA_ENV` is set.
 - `run_visualize.sh`: runs standalone evaluation/visualization, optionally activating a conda env if `PIPELINE_CONDA_ENV` is set.
+- `specify_visualize.py`: visualizes one selected sample with one selected trained weight file.
+- `SPECIFY_VISUALIZE.md`: single-sample visualization instructions.
 - `README.md`: short quick-start instructions.
 - `COLAB.md`: Colab-specific setup and run instructions.
 
@@ -23,7 +25,7 @@ cp configs/default.toml configs/my_experiment.toml
 ./run_visualize.sh --config configs/my_experiment.toml --experiment-name <experiment_name>
 ```
 
-The environment name does not need to be `eeg`; it only needs the dependencies installed. The config file is the intended editing point. Avoid editing `main.py` or `visualize.py` for normal experiments.
+The environment name does not need to be `eeg`; it only needs the dependencies installed. The config file is the intended editing point. Avoid editing `main.py` or `visualize_nearby.py` for normal experiments.
 
 For Google Colab:
 
@@ -137,6 +139,7 @@ Augmentation is applied only to the training split.
 - `augment="yes"` repeats each training patch `aug_multiplier` times and applies randomized Albumentations transforms to repeated samples.
 - `augment_index=0` is the original patch.
 - `augment_index>0` uses the training augmentation pipeline.
+- Training patches whose ground-truth mask contains no foreground pixels are removed before the augmentation multiplier is applied. Validation and test patches are not filtered.
 
 The training augmentation pipeline uses only the requested techniques:
 
@@ -185,30 +188,40 @@ It uses the project utility modules directly:
 - `utils.dataloader.create_dataloaders`
 - `utils.metrics.BCEDiceLoss`
 - `utils.metrics.compute_binary_metrics`
-- `utils.pretrained_unet.get_model`
+- `utils.model_factory.get_model`
 
 Default behavior:
 
-- trains `dataset_tu`
+- trains the dataset selected in the editable config
+- trains `model_name="unet"`
 - uses 5 folds
 - uses augmentation with `aug_multiplier=10`
-- trains for up to 100 epochs per fold
-- uses early stopping with patience 30
+- trains for up to the configured number of epochs per fold
+- uses early stopping with the configured patience
 - saves each experiment under `model/<experiment_name>/`
 - saves best model weights to `model/<experiment_name>/weights/<fold>.pth`
 - saves loss/Dice plots and JSON histories to `model/<experiment_name>/outputs/`
 - saves the resolved configuration to `model/<experiment_name>/config.json`
+- lets `best_metric` choose the validation metric for best-model saving, early stopping, and scheduler plateau detection
+- prints split sample counts for every fold:
+  - train base patches after foreground filtering
+  - train patches after augmentation multiplier
+  - validation patches
+  - test patches
 
 Experiment attributes are centralized near the top of `main.py`:
 
 ```python
 CONFIG = ExperimentConfig(
-    dataset="dataset_tu",
+    dataset="dataset_drac",
+    model_name="unet",
     augment=True,
     aug_multiplier=10,
     epochs=100,
     batch_size=8,
+    grad_accum_steps=1,
     lr=1e-4,
+    best_metric="dice",
     use_amp=True,
     use_scheduler=True,
     scheduler_factor=0.5,
@@ -223,13 +236,13 @@ You can edit `CONFIG` directly for notebook-style experimentation, or override v
 When `experiment_name=None`, `main.py` auto-generates a name from the resolved config:
 
 ```text
-<dataset>_raw_<augment>_augx<aug_multiplier>_folds<k_folds>_ep<epochs>_bs<batch_size>_lr<lr>_<amp>_<scheduler>_unet_efficientnetb3
+<dataset>_raw_<augment>_augx<aug_multiplier>_folds<k_folds>_ep<epochs>_bs<batch_size>_ga<grad_accum_steps>_lr<lr>_<amp>_<scheduler>_<model_token>
 ```
 
 Example:
 
 ```text
-tu_raw_with_augment_augx10_folds5_ep100_bs8_lr0p0001_amp_plateau_unet_efficientnetb3
+tu_raw_with_augment_augx10_folds5_ep100_bs8_ga1_lr0p0001_amp_plateau_unet_efficientnetb3
 ```
 
 Run example:
@@ -258,6 +271,11 @@ Use a custom experiment folder name:
 python main.py --experiment-name tu_trial_01
 ```
 
+Model selection:
+
+- `model_name="unet"` uses the EfficientNet-B3 U-Net from `segmentation_models_pytorch`.
+- `grad_accum_steps` keeps a larger effective training batch while the CUDA mini-batch stays small.
+
 The script expects batches from the dataloader as dictionaries with `image` and `mask` tensors. Validation metrics use hole-filled postprocessed predictions. Training Dice uses thresholded predictions without hole filling to keep per-batch training feedback lightweight.
 
 Training performance behavior:
@@ -266,8 +284,9 @@ Training performance behavior:
 - Uses pinned-memory dataloading automatically when running on CUDA.
 - Uses non-blocking device transfers for batch tensors.
 - Uses AMP by default on CUDA to reduce GPU memory and improve throughput.
+- Supports gradient accumulation with `grad_accum_steps`; the effective training batch is `batch_size * grad_accum_steps`.
 - Uses `dice_score_from_logits` for train Dice instead of computing the full metric dictionary each batch.
-- Keeps validation postprocessing because validation Dice drives model selection and scheduler behavior.
+- Keeps validation postprocessing because the selected validation metric drives model selection and scheduler behavior.
 
 AMP can be disabled with:
 
@@ -278,7 +297,7 @@ python main.py --no-amp
 Scheduler behavior:
 
 - Enabled by default with `ReduceLROnPlateau`.
-- Monitors validation Dice in `mode="max"`.
+- Monitors the selected `best_metric`; `loss` uses `mode="min"` and all other metrics use `mode="max"`.
 - Uses `scheduler_factor`, `scheduler_patience`, and `min_lr` from `CONFIG`.
 - Can be disabled with `use_scheduler=False` or `python main.py --no-scheduler`.
 - The learning rate is logged in `history_fold_<fold>.json` and plotted in `loss_dice_fold_<fold>.png`.
@@ -289,16 +308,16 @@ Environment behavior:
 - The active conda environment, Python executable, and conda prefix are saved in `config.json`.
 - To enforce a specific environment, set `required_conda_env="env_name"` in the TOML config or run with `--required-conda-env env_name`.
 
-## `visualize.py`
+## `visualize_nearby.py`
 
-Standalone evaluation and visualization script. It does not import or run `main.py`.
+Standalone evaluation and visualization script. It does not import or run `main.py`. The root-level `visualize.py` remains only as a compatibility wrapper around this script.
 
 It uses:
 
 - `utils.dataloader.create_dataloaders`
 - `utils.metrics.compute_binary_mask_metrics`
 - `utils.metrics.get_postprocessed_mask`
-- `utils.pretrained_unet.get_model`
+- `utils.model_factory.get_model`
 
 Default behavior:
 
@@ -306,17 +325,21 @@ Default behavior:
 - rebuilds the test dataloader for each fold
 - stitches four 512x512 test patches back into one 1024x1024 image
 - applies sigmoid, thresholding, and hole filling to predictions
-- reuses that postprocessed mask for both metrics and saved images
+- reuses that postprocessed mask for both metrics and saved images unless nearby representative-point filtering is enabled
+- optionally keeps predicted connected components that are within a configured pixel radius of a representative localization point
 - keeps stitched 1024x1024 buffers on CPU so GPU memory is used only for active model batches
-- saves full-image visualization panels to `model/<experiment_name>/outputs/test_fold_<fold>/`
+- saves normal full-image visualization panels to `model/<experiment_name>/outputs/test_fold_<fold>/`
+- saves nearby filtered panels to `model/<experiment_name>/outputs_nearby/test_fold_<fold>/`
 - saves per-image metrics to `per_image_metrics.csv`
-- saves fold-level metrics to `model/<experiment_name>/outputs/test_metrics.csv` and `test_metrics.json`
+- saves normal fold-level metrics to `model/<experiment_name>/outputs/test_metrics.csv` and `test_metrics.json`
+- saves nearby filtered fold-level metrics to `model/<experiment_name>/outputs_nearby/test_metrics.csv` and `test_metrics.json`
+- saves average/std performance across folds to `test_metrics_summary.csv` and `test_metrics_summary.json` in the active output directory
 - saves visualization settings to `visualize_config.json`
 
 Run example:
 
 ```bash
-python visualize.py --experiment-name tu_trial_01
+python visualize_nearby.py --experiment-name tu_trial_01
 ```
 
 Recommended run command:
@@ -325,12 +348,97 @@ Recommended run command:
 ./run_visualize.sh --experiment-name tu_trial_01
 ```
 
-`visualize.py` reads `[visualize]` from the TOML config first, then applies CLI overrides.
+`visualize_nearby.py` reads `[visualize]` from the TOML config first, then applies CLI overrides.
 
-If `--experiment-name` is omitted, `visualize.py` generates the same default-style experiment name from its config. If `model/<experiment_name>/config.json` exists, dataset, base directory, folds, batch size, and threshold are loaded from that saved config.
+If `--experiment-name` is omitted, `visualize_nearby.py` generates the same default-style experiment name from its config. If `model/<experiment_name>/config.json` exists, dataset, model name, base directory, folds, batch size, and threshold are loaded from that saved config.
+
+Representative-point filtering:
+
+```toml
+[visualize]
+apply_nearby_filter = true
+points_csv = "combined_representative_points.csv"
+points_image_name_template = "nv ({sample_id}).jpg"
+radius_tolerance = 25.0
+```
+
+The points CSV must contain `image_number`, `x`, and `y` columns. CSV coordinates use `x` as column and `y` as row in the stitched 1024x1024 image. `points_image_name_template` controls how a dataset `sample_id` maps to the CSV `image_number` value. `radius_tolerance` controls how close a predicted component must be to at least one point.
+
+Output separation:
+
+- `apply_nearby_filter = false` writes to `model/<experiment_name>/outputs/`.
+- `apply_nearby_filter = true` writes to `model/<experiment_name>/outputs_nearby/`.
+- Running both modes on the same experiment does not overwrite the other mode's metrics or images.
+
+Average performance across folds:
+
+- Every visualization run writes `test_metrics_summary.csv`.
+- The summary contains mean and standard deviation over all evaluated folds.
+- The console prints average Dice and IoU after fold evaluation.
+
+Average performance across datasets:
+
+If the same setting is trained/evaluated for both datasets, the experiment folders should share the same suffix:
+
+```text
+model/tu_<setting_suffix>/
+model/drac_<setting_suffix>/
+```
+
+Then run:
+
+```bash
+python visualize_nearby.py --summary-only --summarize-all-datasets --setting-suffix <setting_suffix>
+```
+
+If the current experiment name already starts with `tu_` or `drac_`, `--setting-suffix` can be omitted:
+
+```bash
+python visualize_nearby.py --experiment-name tu_<setting_suffix> --summary-only --summarize-all-datasets
+```
+
+The combined dataset summary is saved under:
+
+```text
+model/dataset_summaries/<setting_suffix>.csv
+model/dataset_summaries/<setting_suffix>.json
+```
+
+For nearby filtered dataset summaries, filenames use the `_nearby` suffix:
+
+```text
+model/dataset_summaries/<setting_suffix>_nearby.csv
+model/dataset_summaries/<setting_suffix>_nearby.json
+```
+
+For `tu` and `drac` rows, mean and standard deviation are computed over that dataset's folds. For the `all` row, mean and standard deviation are computed over all available fold rows from both datasets.
 
 The script does not require a specific conda environment by default. To enforce one:
 
 ```bash
-python visualize.py --experiment-name tu_trial_01 --required-conda-env eeg
+python visualize_nearby.py --experiment-name tu_trial_01 --required-conda-env eeg
 ```
+
+## `specify_visualize.py`
+
+Single-sample visualization script for checking one dataset image with one trained weight file. It does not run full fold evaluation and writes separate files under `model/<experiment_name>/extra_output/`.
+
+Required values:
+
+- `weight_path`: trained fold weight path, usually `model/<experiment_name>/weights/<fold>.pth`
+- `dataset`: `tu`, `drac`, `dataset_tu`, or `dataset_drac`
+- `sample_id`: image id inside the selected dataset
+
+Run with the defaults from the script's parameter section:
+
+```bash
+python specify_visualize.py
+```
+
+Or pass the values explicitly:
+
+```bash
+python specify_visualize.py model/<experiment_name>/weights/1.pth tu 1
+```
+
+The detailed usage and output reference is in `SPECIFY_VISUALIZE.md`.

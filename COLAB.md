@@ -73,6 +73,7 @@ Edit it in the Colab file browser, especially:
 
 ```toml
 dataset = "dataset_drac"
+model_name = "unet"
 base_dir = "."
 model_root = "/content/drive/MyDrive/rnv_pipeline/model"
 epochs = 100
@@ -99,14 +100,16 @@ For a quick smoke test:
 If you used a fixed experiment name:
 
 ```python
-!python visualize.py --config configs/my_colab_experiment.toml --experiment-name colab_smoke_test
+!python visualize_nearby.py --config configs/my_colab_experiment.toml --experiment-name colab_smoke_test
 ```
 
 If training auto-generated the name, check the printed experiment name or the folder under `model_root`, then pass it:
 
 ```python
-!python visualize.py --config configs/my_colab_experiment.toml --experiment-name <experiment_name>
+!python visualize_nearby.py --config configs/my_colab_experiment.toml --experiment-name <experiment_name>
 ```
+
+To enable nearby representative-point filtering, set `apply_nearby_filter = true`, `points_csv`, and `radius_tolerance` in `[visualize]`, or pass `--nearby-filter --points-csv <csv_path>`. Normal outputs stay under `outputs/`; filtered outputs are written to `outputs_nearby/`.
 
 ## Notes
 

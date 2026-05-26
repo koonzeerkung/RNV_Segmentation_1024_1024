@@ -1,6 +1,7 @@
 torch
 torchvision
 segmentation-models-pytorch
+timm
 albumentations
 opencv-python-headless
 numpy

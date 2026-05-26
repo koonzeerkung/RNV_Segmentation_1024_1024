@@ -7,6 +7,7 @@ import os
 import random
 from pathlib import Path
 import sys
+from typing import Any
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
@@ -19,18 +20,24 @@ from tqdm.auto import tqdm
 from utils.config import dataclass_from_section
 from utils.dataloader import create_dataloaders
 from utils.metrics import BCEDiceLoss, compute_binary_metrics, dice_score_from_logits
-from utils.pretrained_unet import get_model
+from utils.model_factory import get_model, model_experiment_token, normalize_model_name
+
+
+MASK_METRICS = ("dice", "iou", "precision", "recall", "specificity", "accuracy")
+BEST_MODEL_METRICS = ("loss", *MASK_METRICS)
 
 
 @dataclass(frozen=True)
 class ExperimentConfig:
     dataset: str = "dataset_tu"
+    model_name: str = "unet"
     augment: bool = True
     aug_multiplier: int = 10
     base_dir: str = "."
     k_folds: int = 5
     epochs: int = 100
     batch_size: int = 8
+    grad_accum_steps: int = 1
     lr: float = 1e-4
     use_amp: bool = True
     use_scheduler: bool = True
@@ -40,6 +47,7 @@ class ExperimentConfig:
     patience: int = 30
     num_workers: int = 0
     threshold: float = 0.5
+    best_metric: str = "dice"
     seed: int = 42
     model_root: str = "model"
     required_conda_env: str = ""
@@ -49,12 +57,14 @@ class ExperimentConfig:
 # Edit these values for a new experiment. CLI arguments can still override them.
 CONFIG = ExperimentConfig(
     dataset="dataset_drac",
+    model_name="unet",
     augment=True,
     aug_multiplier=10,
     base_dir=".",
     k_folds=5,
     epochs=100,
     batch_size=8,
+    grad_accum_steps=1,
     lr=1e-4,
     use_amp=True,
     use_scheduler=True,
@@ -64,6 +74,7 @@ CONFIG = ExperimentConfig(
     patience=30,
     num_workers=0,
     threshold=0.5,
+    best_metric="dice",
     seed=42,
     model_root="model",
     required_conda_env="",
@@ -84,15 +95,22 @@ def parse_args() -> argparse.Namespace:
     config_args, remaining_args = pre_parser.parse_known_args()
     config = load_train_config(config_args.config)
 
-    parser = argparse.ArgumentParser(description="Train U-Net with fixed k-fold splits.")
+    parser = argparse.ArgumentParser(description="Train a segmentation model with fixed k-fold splits.")
     parser.add_argument("--config", default=config_args.config)
     parser.add_argument("--dataset", default=config.dataset, choices=["tu", "drac", "dataset_tu", "dataset_drac"])
+    parser.add_argument("--model-name", default=config.model_name, help="Model architecture: unet.")
     parser.add_argument("--augment", action=argparse.BooleanOptionalAction, default=config.augment)
     parser.add_argument("--aug-multiplier", type=int, default=config.aug_multiplier)
     parser.add_argument("--base-dir", default=config.base_dir)
     parser.add_argument("--k-folds", type=int, default=config.k_folds)
     parser.add_argument("--epochs", type=int, default=config.epochs)
     parser.add_argument("--batch-size", type=int, default=config.batch_size)
+    parser.add_argument(
+        "--grad-accum-steps",
+        type=int,
+        default=config.grad_accum_steps,
+        help="Accumulate gradients across this many mini-batches before optimizer step.",
+    )
     parser.add_argument("--lr", type=float, default=config.lr)
     parser.add_argument(
         "--amp",
@@ -114,6 +132,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--patience", type=int, default=config.patience)
     parser.add_argument("--num-workers", type=int, default=config.num_workers)
     parser.add_argument("--threshold", type=float, default=config.threshold)
+    parser.add_argument(
+        "--best-metric",
+        default=config.best_metric,
+        help=(
+            "Validation metric used for saving the best model and early stopping. "
+            f"Choices: {', '.join(BEST_MODEL_METRICS)}. Prefix 'val_' is also accepted."
+        ),
+    )
     parser.add_argument("--seed", type=int, default=config.seed)
     parser.add_argument("--model-root", default=config.model_root)
     parser.add_argument("--required-conda-env", default=config.required_conda_env)
@@ -121,7 +147,41 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args(remaining_args)
     if args.experiment_name == "":
         args.experiment_name = None
+    try:
+        args.model_name = normalize_model_name(args.model_name)
+        args.best_metric = normalize_best_metric(args.best_metric)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.grad_accum_steps < 1:
+        parser.error("--grad-accum-steps must be at least 1")
     return args
+
+
+def normalize_best_metric(metric: str) -> str:
+    normalized = metric.strip().lower()
+    if normalized.startswith("val_"):
+        normalized = normalized[4:]
+
+    if normalized not in BEST_MODEL_METRICS:
+        choices = ", ".join(BEST_MODEL_METRICS)
+        raise ValueError(f"Invalid --best-metric '{metric}'. Expected one of: {choices}")
+    return normalized
+
+
+def best_metric_mode(metric: str) -> str:
+    return "min" if metric == "loss" else "max"
+
+
+def is_better_metric_value(value: float, best_value: float | None, metric: str) -> bool:
+    if best_value is None:
+        return True
+    if best_metric_mode(metric) == "min":
+        return value < best_value
+    return value > best_value
+
+
+def format_metric_name(metric: str) -> str:
+    return metric.replace("_", " ").title()
 
 
 def set_seed(seed: int) -> None:
@@ -170,23 +230,32 @@ def build_experiment_name(args: argparse.Namespace) -> str:
     scheduler_name = "plateau" if args.use_scheduler else "no_scheduler"
     dataset_name = str(args.dataset).replace("dataset_", "")
     amp_name = "amp" if args.use_amp else "fp32"
+    model_token = model_experiment_token(args.model_name)
     return (
         f"{dataset_name}_raw_{aug_name}"
         f"_augx{args.aug_multiplier}"
         f"_folds{args.k_folds}"
         f"_ep{args.epochs}"
         f"_bs{args.batch_size}"
+        f"_ga{args.grad_accum_steps}"
         f"_lr{_format_float(args.lr)}"
         f"_{amp_name}"
         f"_{scheduler_name}"
-        "_unet_efficientnetb3"
+        f"_{model_token}"
     )
 
 
 def get_logits(model: torch.nn.Module, images: torch.Tensor) -> torch.Tensor:
     output = model(images)
     if isinstance(output, dict):
-        return output["out"]
+        if "out" in output:
+            return output["out"]
+        if "main_out" in output:
+            return output["main_out"]
+        if len(output) == 1:
+            return next(iter(output.values()))
+        keys = ", ".join(sorted(output))
+        raise KeyError(f"Model output must contain 'out' logits. Available keys: {keys}")
     return output
 
 
@@ -198,7 +267,7 @@ def build_scheduler(
         return None
     return optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
-        mode="max",
+        mode=best_metric_mode(args.best_metric),
         factor=args.scheduler_factor,
         patience=args.scheduler_patience,
         min_lr=args.min_lr,
@@ -218,6 +287,7 @@ def train_one_epoch(
     threshold: float,
     scaler: torch.amp.GradScaler,
     use_amp: bool,
+    grad_accum_steps: int,
     epoch: int,
     epochs: int,
 ) -> dict[str, float]:
@@ -226,23 +296,27 @@ def train_one_epoch(
     dices: list[float] = []
 
     loop = tqdm(loader, desc=f"Epoch {epoch}/{epochs} [Train]", leave=False)
-    for batch in loop:
+    optimizer.zero_grad(set_to_none=True)
+    num_batches = len(loader)
+    for batch_index, batch in enumerate(loop, start=1):
         images = batch["image"].to(device, non_blocking=True)
         masks = batch["mask"].to(device, non_blocking=True)
 
-        optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast(device_type=device.type, enabled=use_amp):
             logits = get_logits(model, images)
             loss = criterion(logits, masks)
 
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
+        scaled_loss = loss / grad_accum_steps
+        scaler.scale(scaled_loss).backward()
+        if batch_index % grad_accum_steps == 0 or batch_index == num_batches:
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad(set_to_none=True)
 
         losses.append(float(loss.detach().cpu().item()))
         dice = dice_score_from_logits(logits.detach(), masks.detach(), threshold=threshold)
         dices.append(float(dice.detach().cpu().item()))
-        loop.set_postfix(loss=losses[-1], dice=dices[-1])
+        loop.set_postfix(loss=losses[-1], dice=dices[-1], accum=grad_accum_steps)
 
     return {
         "loss": float(np.mean(losses)),
@@ -261,8 +335,7 @@ def validate(
 ) -> dict[str, float]:
     model.eval()
     losses: list[float] = []
-    dices: list[float] = []
-    ious: list[float] = []
+    metric_values: dict[str, list[float]] = {name: [] for name in MASK_METRICS}
 
     for batch in loader:
         images = batch["image"].to(device, non_blocking=True)
@@ -274,13 +347,12 @@ def validate(
         metrics = compute_binary_metrics(logits.float(), masks, threshold=threshold, postprocess=True)
 
         losses.append(float(loss.detach().cpu().item()))
-        dices.append(metrics["dice"])
-        ious.append(metrics["iou"])
+        for name in MASK_METRICS:
+            metric_values[name].append(metrics[name])
 
     return {
         "loss": float(np.mean(losses)),
-        "dice": float(np.mean(dices)),
-        "iou": float(np.mean(ious)),
+        **{name: float(np.mean(values)) for name, values in metric_values.items()},
     }
 
 
@@ -323,6 +395,31 @@ def save_history_json(history: dict[str, list[float]], output_dir: Path, fold: i
     history_path.write_text(json.dumps(history, indent=2), encoding="utf-8")
 
 
+def describe_loader_samples(loaders: dict[str, torch.utils.data.DataLoader]) -> None:
+    train_dataset = loaders["train"].dataset
+    validation_dataset = loaders["validation"].dataset
+    test_dataset = loaders["test"].dataset
+
+    train_base = len(getattr(train_dataset, "samples", train_dataset))
+    train_after_augmentation = len(train_dataset)
+    validation_count = len(validation_dataset)
+    test_count = len(test_dataset)
+
+    print("Split sample counts:")
+    print(f"  Train base patches: {train_base}")
+    print(f"  Train after augmentation: {train_after_augmentation}")
+    print(f"  Validation patches: {validation_count}")
+    print(f"  Test patches: {test_count}")
+
+
+def cuda_oom_message(args: argparse.Namespace, fold: int) -> str:
+    return (
+        f"CUDA out of memory during fold {fold}. "
+        "Try lowering --batch-size, keeping --amp enabled, or raising "
+        "--grad-accum-steps to preserve effective batch size while reducing mini-batch memory."
+    )
+
+
 def run_fold(
     fold: int,
     args: argparse.Namespace,
@@ -330,7 +427,7 @@ def run_fold(
     weights_dir: Path,
     output_dir: Path,
     experiment_name: str,
-) -> dict[str, float]:
+) -> dict[str, Any]:
     print(f"\n{'=' * 40}")
     print(f"Starting fold {fold}/{args.k_folds}")
     print(f"{'=' * 40}")
@@ -348,8 +445,20 @@ def run_fold(
         persistent_workers=args.num_workers > 0,
         prefetch_factor=2,
     )
+    describe_loader_samples(loaders)
 
-    model = get_model(device)
+    print(
+        "Batching: "
+        f"batch_size={args.batch_size}, grad_accum_steps={args.grad_accum_steps}, "
+        f"effective_train_batch={args.batch_size * args.grad_accum_steps}"
+    )
+
+    model = get_model(
+        device,
+        model_name=args.model_name,
+        in_channels=1,
+        out_channels=1,
+    )
     criterion = BCEDiceLoss(bce_weight=0.5, dice_weight=0.5)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = build_scheduler(optimizer, args)
@@ -359,47 +468,55 @@ def run_fold(
     history: dict[str, list[float]] = {
         "train_loss": [],
         "train_dice": [],
-        "val_loss": [],
-        "val_dice": [],
-        "val_iou": [],
+        **{f"val_{name}": [] for name in BEST_MODEL_METRICS},
         "lr": [],
     }
 
-    best_val_dice = 0.0
+    best_metric_value: float | None = None
     patience_counter = 0
     best_model_path = weights_dir / f"{fold}.pth"
+    best_metric_label = f"Val {format_metric_name(args.best_metric)}"
+    print(
+        f"Best model metric: {best_metric_label} "
+        f"({best_metric_mode(args.best_metric)}, threshold={args.threshold:g})"
+    )
 
     for epoch in range(1, args.epochs + 1):
-        train_metrics = train_one_epoch(
-            model=model,
-            loader=loaders["train"],
-            criterion=criterion,
-            optimizer=optimizer,
-            device=device,
-            threshold=args.threshold,
-            scaler=scaler,
-            use_amp=use_amp,
-            epoch=epoch,
-            epochs=args.epochs,
-        )
-        val_metrics = validate(
-            model=model,
-            loader=loaders["validation"],
-            criterion=criterion,
-            device=device,
-            threshold=args.threshold,
-            use_amp=use_amp,
-        )
+        try:
+            train_metrics = train_one_epoch(
+                model=model,
+                loader=loaders["train"],
+                criterion=criterion,
+                optimizer=optimizer,
+                device=device,
+                threshold=args.threshold,
+                scaler=scaler,
+                use_amp=use_amp,
+                grad_accum_steps=args.grad_accum_steps,
+                epoch=epoch,
+                epochs=args.epochs,
+            )
+            val_metrics = validate(
+                model=model,
+                loader=loaders["validation"],
+                criterion=criterion,
+                device=device,
+                threshold=args.threshold,
+                use_amp=use_amp,
+            )
+        except torch.cuda.OutOfMemoryError as exc:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            raise RuntimeError(cuda_oom_message(args, fold)) from exc
 
         history["train_loss"].append(train_metrics["loss"])
         history["train_dice"].append(train_metrics["dice"])
-        history["val_loss"].append(val_metrics["loss"])
-        history["val_dice"].append(val_metrics["dice"])
-        history["val_iou"].append(val_metrics["iou"])
+        for name in BEST_MODEL_METRICS:
+            history[f"val_{name}"].append(val_metrics[name])
 
         previous_lr = get_current_lr(optimizer)
         if scheduler is not None:
-            scheduler.step(val_metrics["dice"])
+            scheduler.step(val_metrics[args.best_metric])
         current_lr = get_current_lr(optimizer)
         history["lr"].append(current_lr)
 
@@ -412,19 +529,22 @@ def run_fold(
             f"Val IoU: {val_metrics['iou']:.4f} | "
             f"LR: {current_lr:.2e}"
         )
+        if args.best_metric not in {"loss", "dice", "iou"}:
+            log_message += f" | {best_metric_label}: {val_metrics[args.best_metric]:.4f}"
         if current_lr < previous_lr:
             log_message += f" (reduced from {previous_lr:.2e})"
         print(log_message)
 
-        if val_metrics["dice"] > best_val_dice:
-            best_val_dice = val_metrics["dice"]
+        current_metric_value = val_metrics[args.best_metric]
+        if is_better_metric_value(current_metric_value, best_metric_value, args.best_metric):
+            best_metric_value = current_metric_value
             patience_counter = 0
             torch.save(model.state_dict(), best_model_path)
-            print(f"Saved new best model: {best_model_path}")
+            print(f"Saved new best model: {best_model_path} ({best_metric_label}: {best_metric_value:.4f})")
         else:
             patience_counter += 1
             if patience_counter >= args.patience:
-                print(f"Early stopping after {args.patience} epochs without validation Dice improvement.")
+                print(f"Early stopping after {args.patience} epochs without {best_metric_label} improvement.")
                 break
 
     save_history_plot(history, output_dir, experiment_name, fold)
@@ -432,9 +552,10 @@ def run_fold(
 
     return {
         "fold": float(fold),
-        "best_val_dice": float(best_val_dice),
-        "last_val_loss": history["val_loss"][-1],
-        "last_val_iou": history["val_iou"][-1],
+        "best_metric": args.best_metric,
+        "best_metric_mode": best_metric_mode(args.best_metric),
+        f"best_val_{args.best_metric}": float(best_metric_value if best_metric_value is not None else np.nan),
+        **{f"last_val_{name}": history[f"val_{name}"][-1] for name in BEST_MODEL_METRICS},
     }
 
 
@@ -452,6 +573,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Experiment: {experiment_name}")
+    print(f"Model: {args.model_name}")
     print(f"Device: {device}")
     print(f"Experiment directory: {experiment_dir}")
     print(f"Weights directory: {weights_dir}")

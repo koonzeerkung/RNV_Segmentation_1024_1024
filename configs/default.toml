@@ -4,13 +4,15 @@
 #   ./run_visualize.sh --config configs/my_experiment.toml --experiment-name <name>
 
 [train]
-dataset = "dataset_drac"      # "dataset_tu", "dataset_drac", "tu", or "drac"
+dataset = "tu"      # "dataset_tu", "dataset_drac", "tu", or "drac"
+model_name = "unet"
 augment = true
 aug_multiplier = 10
 base_dir = "."
 k_folds = 5
 epochs = 100
 batch_size = 8
+grad_accum_steps = 4           # Effective training batch is batch_size * grad_accum_steps.
 lr = 0.0001
 use_amp = true
 use_scheduler = true
@@ -18,21 +20,32 @@ scheduler_factor = 0.5
 scheduler_patience = 3
 min_lr = 0.0000001
 patience = 30
-num_workers = 0
+num_workers = 2
 threshold = 0.5
+best_metric = "dice"              # Best-model metric: loss, dice, iou, precision, recall, specificity, or accuracy.
 seed = 42
 model_root = "model"
-required_conda_env = ""        # Optional. Set to your conda preference only if you want to enforce that env.
-experiment_name = ""          # Empty string means auto-generate from config.
+required_conda_env = "eeg"        # Optional. Set to your conda preference only if you want to enforce that env.
+experiment_name = "tu_0.5thresold_100epoch_efficientnet"          # Empty string means auto-generate from config.
 
 [visualize]
-dataset = "dataset_drac"
+dataset = "tu"
+model_name = "unet"   # Usually overwritten from model/<experiment_name>/config.json when available.
 base_dir = "."
 k_folds = 5
 batch_size = 8
-threshold = 0.5
+threshold = 0.4
 use_amp = true
 model_root = "model"
-experiment_name = ""          # Empty string means auto-generate from config.
-required_conda_env = ""        # Optional. Set to "eeg" only if you want to enforce that env.
+experiment_name = "tu_0.4thresold_100epoch_efficientnet"          # Empty string means auto-generate from config. Use the training experiment name.
+required_conda_env = "eeg"        # Optional. Set to "eeg" only if you want to enforce that env.
 max_images_per_fold = 0       # 0 means visualize all test images.
+summarize_all_datasets = false
+summary_only = false
+setting_suffix = ""           # Optional. Shared suffix after "tu_" or "drac_" for cross-dataset summary.
+
+apply_nearby_filter = true
+# false writes to model/<experiment_name>/outputs; true writes to model/<experiment_name>/outputs_nearby.
+points_csv = "combined_representative_points.csv"               # Required when apply_nearby_filter = true.
+points_image_name_template = "nv ({sample_id}).jpg"
+radius_tolerance = 200       # Pixel radius around each representative point.

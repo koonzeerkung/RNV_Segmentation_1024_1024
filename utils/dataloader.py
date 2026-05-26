@@ -194,6 +194,34 @@ def build_samples(dataset: str, fold: int, base_dir: str | Path = ".") -> dict[S
     return samples
 
 
+def _mask_crop_contains_answer(
+    mask_path: Path,
+    crop_box: tuple[int, int, int, int],
+    mask_threshold: float = 0.5,
+) -> bool:
+    with Image.open(mask_path) as mask:
+        mask_crop = mask.convert("L").crop(crop_box)
+
+    if mask_crop.size != (PATCH_SIZE, PATCH_SIZE):
+        raise ValueError(f"Expected {PATCH_SIZE}x{PATCH_SIZE} mask patch, got {mask_crop.size}: {mask_path}")
+
+    mask_array = np.asarray(mask_crop, dtype=np.uint8).astype(np.float32) / 255.0
+    return bool(np.any(mask_array >= mask_threshold))
+
+
+def filter_samples_with_answers(
+    samples: list[SliceSample],
+    mask_threshold: float = 0.5,
+) -> list[SliceSample]:
+    """Keep only samples whose ground-truth mask crop contains foreground."""
+
+    return [
+        sample
+        for sample in samples
+        if _mask_crop_contains_answer(sample.mask_path, sample.crop_box, mask_threshold=mask_threshold)
+    ]
+
+
 class KFoldSliceDataset(Dataset):
     """Dataset that loads grayscale 512x512 raw/gt slices from one k-fold split."""
 
@@ -338,8 +366,9 @@ def create_dataloaders(
     """
 
     split_samples = build_samples(dataset=dataset, fold=fold, base_dir=base_dir)
+    train_samples = filter_samples_with_answers(split_samples["train"])
     train_dataset = KFoldSliceDataset(
-        split_samples["train"],
+        train_samples,
         augment=augment,
         aug_multiplier=aug_multiplier,
         include_metadata=include_metadata,
@@ -406,6 +435,7 @@ __all__ = [
     "build_train_augmentation",
     "build_samples",
     "create_dataloaders",
+    "filter_samples_with_answers",
     "get_dataloader",
     "get_kfold_chunks",
     "normalize_dataset_name",

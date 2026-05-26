@@ -4,7 +4,11 @@ __pycache__/
 
 model/*/weights/
 model/*/outputs/
+model/*/outputs_nearby/
+model/*/outputs_lieswithin/
+model/*/extra_output/
 model/*/config.json
+model/dataset_summaries/
 
 output/
 .DS_Store

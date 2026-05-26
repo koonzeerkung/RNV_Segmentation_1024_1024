@@ -6,4 +6,4 @@ if [[ -n "${PIPELINE_CONDA_ENV:-}" ]]; then
   conda activate "${PIPELINE_CONDA_ENV}"
 fi
 
-python visualize.py "$@"
+python visualize_nearby.py "$@"
