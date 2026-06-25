@@ -1,0 +1,50 @@
+# Google Colab example config.
+# Edit base_dir/model_root depending on where you put the datasets and outputs.
+
+[train]
+dataset = "dataset_tu"
+model_name = "unet"
+backbone = "efficientnet-b3"
+augment = true
+aug_multiplier = 10
+base_dir = "."                         # Folder containing dataset_tu/ and dataset_drac/
+k_folds = 5
+epochs = 100
+batch_size = 8
+grad_accum_steps = 1
+lr = 0.0001
+use_amp = true
+use_scheduler = true
+scheduler_factor = 0.5
+scheduler_patience = 3
+min_lr = 0.0000001
+patience = 30
+num_workers = 2
+threshold = 0.5
+best_metric = "dice"
+seed = 42
+model_root = "/content/drive/MyDrive/rnv_pipeline/model"
+required_conda_env = ""
+experiment_name = ""
+
+[visualize]
+dataset = "dataset_drac"
+model_name = "unet"                  # Usually overwritten from saved training config.
+backbone = "efficientnet-b3"         # Usually overwritten from saved training config.
+base_dir = "."
+k_folds = 5
+batch_size = 1
+threshold = 0.5
+use_amp = true
+model_root = "/content/drive/MyDrive/rnv_pipeline/model"
+experiment_name = ""
+required_conda_env = ""
+max_images_per_fold = 0
+summarize_all_datasets = false
+summary_only = false
+setting_suffix = ""
+apply_nearby_filter = false
+# false writes to model/<experiment_name>/outputs; true writes to model/<experiment_name>/outputs_nearby.
+points_csv = ""
+points_image_name_template = "nv ({sample_id}).jpg"
+radius_tolerance = 25.0

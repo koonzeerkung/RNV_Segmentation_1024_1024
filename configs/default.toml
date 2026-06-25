@@ -1,0 +1,53 @@
+# Default editable pipeline configuration.
+# Friends should usually copy this file, edit the copy, then pass it with:
+#   ./run_main.sh --config configs/my_experiment.toml
+#   ./run_visualize.sh --config configs/my_experiment.toml --experiment-name <name>
+
+[train]
+dataset = "tu"      # "dataset_tu", "dataset_drac", "tu", or "drac"
+model_name = "unet"        # "unet", "unetplusplus", "deeplabv3plus", or "deeplabv3".
+backbone = "efficientnet-b3"  # "efficientnet-b3", "inceptionv4", or "densenet169".
+augment = true
+aug_multiplier = 10
+base_dir = "."
+k_folds = 5
+epochs = 200
+batch_size = 8
+grad_accum_steps = 4           # Effective training batch is batch_size * grad_accum_steps.
+lr = 0.0001
+use_amp = true
+use_scheduler = true
+scheduler_factor = 0.5
+scheduler_patience = 5
+min_lr = 0.0000001
+patience = 25
+num_workers = 4
+threshold = 0.5
+best_metric = "dice"              # Best-model metric: loss, dice, iou, precision, recall, specificity, or accuracy.
+seed = 69
+model_root = "model"
+required_conda_env = "rnv"        # Optional. Set to your conda preference only if you want to enforce that env.
+experiment_name = ""          # Empty string means auto-generate from config.
+
+[visualize]
+dataset = "tu"
+model_name = "unet"   # Usually overwritten from model/<experiment_name>/config.json when available.
+backbone = "efficientnet-b3"   # Usually overwritten from model/<experiment_name>/config.json when available.
+base_dir = "."
+k_folds = 5
+batch_size = 8
+threshold = 0.4
+use_amp = true
+model_root = "model"
+experiment_name = ""          # Empty string means auto-generate from config. Use the training experiment name.
+required_conda_env = "rnv"        # Optional. Set to your conda preference only if you want to enforce that env.
+max_images_per_fold = 0       # 0 means visualize all test images.
+summarize_all_datasets = false
+summary_only = false
+setting_suffix = ""           # Optional. Shared suffix after "tu_" or "drac_" for cross-dataset summary.
+
+apply_nearby_filter = false
+# false writes to model/<experiment_name>/outputs; true writes to model/<experiment_name>/outputs_nearby.
+points_csv = ""               # Required local CSV path when apply_nearby_filter = true.
+points_image_name_template = "nv ({sample_id}).jpg"
+radius_tolerance = 200       # Pixel radius around each representative point.
