@@ -5,6 +5,7 @@
 dataset = "dataset_tu"
 model_name = "unet"
 backbone = "efficientnet-b3"
+encoder_weights = "imagenet"
 augment = true
 aug_multiplier = 10
 base_dir = "."                         # Folder containing dataset_tu/ and dataset_drac/
@@ -31,6 +32,7 @@ experiment_name = ""
 dataset = "dataset_drac"
 model_name = "unet"                  # Usually overwritten from saved training config.
 backbone = "efficientnet-b3"         # Usually overwritten from saved training config.
+encoder_weights = "imagenet"        # Usually overwritten from saved training config.
 base_dir = "."
 k_folds = 5
 batch_size = 1

@@ -17,7 +17,7 @@ from PIL import Image
 
 from utils.dataloader import SOURCE_SIZE, find_image_file, resolve_dataset_layout
 from utils.metrics import compute_binary_mask_metrics, get_postprocessed_mask
-from utils.model_factory import get_model, normalize_backbone_name, normalize_model_name
+from utils.model_factory import get_model, normalize_backbone_name, normalize_encoder_weights, normalize_model_name
 
 
 # =========================
@@ -31,6 +31,7 @@ DEFAULT_BASE_DIR: str | None = "."
 DEFAULT_THRESHOLD: float | None = 0.4
 DEFAULT_MODEL_NAME: str | None = None
 DEFAULT_BACKBONE: str | None = None
+DEFAULT_ENCODER_WEIGHTS: str | None = None
 DEFAULT_USE_AMP = True
 OUTPUT_SUBDIR = "extra_output"
 SAVE_PREDICTION_NPY = True
@@ -72,6 +73,11 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_BACKBONE,
         help="Encoder backbone: efficientnet-b3, inceptionv4, or densenet169.",
     )
+    parser.add_argument(
+        "--encoder-weights",
+        default=DEFAULT_ENCODER_WEIGHTS,
+        help="Encoder weights passed to segmentation-models-pytorch. Use 'none' to avoid downloads.",
+    )
     parser.add_argument("--amp", "--use-amp", dest="use_amp", action=argparse.BooleanOptionalAction, default=DEFAULT_USE_AMP)
     args = parser.parse_args()
     missing = [
@@ -86,6 +92,7 @@ def parse_args() -> argparse.Namespace:
         args.model_name = normalize_model_name(args.model_name)
     if args.backbone:
         args.backbone = normalize_backbone_name(args.backbone)
+    args.encoder_weights = normalize_encoder_weights(args.encoder_weights)
     return args
 
 
@@ -237,6 +244,11 @@ def main() -> None:
     threshold = args.threshold if args.threshold is not None else float(config.get("threshold", 0.5))
     model_name = args.model_name or normalize_model_name(str(config.get("model_name", "unet")))
     backbone = args.backbone or normalize_backbone_name(str(config.get("backbone", "efficientnet-b3")))
+    encoder_weights = (
+        args.encoder_weights
+        if args.encoder_weights is not None
+        else normalize_encoder_weights(config.get("encoder_weights", "imagenet"))
+    )
 
     dataset_name, _, raw_dir, gt_dir = resolve_dataset_layout(args.dataset, base_dir)
     raw_path = find_image_file(raw_dir, args.sample_id)
@@ -259,7 +271,14 @@ def main() -> None:
                 raise ValueError(f"Expected {SOURCE_SIZE}x{SOURCE_SIZE} mask, got {gt_image.size}: {gt_path}")
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = get_model(device, model_name=model_name, backbone=backbone, in_channels=1, out_channels=1)
+        model = get_model(
+            device,
+            model_name=model_name,
+            backbone=backbone,
+            encoder_weights=encoder_weights,
+            in_channels=1,
+            out_channels=1,
+        )
         model.load_state_dict(torch.load(weight_path, map_location=device))
         model.eval()
 

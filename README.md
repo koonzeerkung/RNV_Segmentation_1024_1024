@@ -34,6 +34,13 @@ For Google Colab, use [COLAB.md](COLAB.md). Short version:
 !python main.py --config configs/colab.toml
 ```
 
+For Kaggle notebooks, use [KAGGLE.md](KAGGLE.md). Short version:
+
+```python
+!pip install segmentation-models-pytorch timm albumentations opencv-python-headless
+!python main.py --config configs/kaggle.toml
+```
+
 ## 2. Add Datasets
 
 Put datasets under one of the supported local layouts.
@@ -105,6 +112,7 @@ Open [configs/default.toml](configs/default.toml) and edit the `[train]` section
 dataset = "tu"
 model_name = "unet"
 backbone = "efficientnet-b3"
+encoder_weights = "imagenet"
 epochs = 200
 batch_size = 8
 lr = 0.0001

@@ -7,6 +7,7 @@
 dataset = "tu"      # "dataset_tu", "dataset_drac", "tu", or "drac"
 model_name = "unet"        # "unet", "unetplusplus", "deeplabv3plus", or "deeplabv3".
 backbone = "efficientnet-b3"  # "efficientnet-b3", "inceptionv4", or "densenet169".
+encoder_weights = "imagenet"  # Use "" or "none" to avoid downloading pretrained encoder weights.
 augment = true
 aug_multiplier = 10
 base_dir = "."
@@ -33,6 +34,7 @@ experiment_name = ""          # Empty string means auto-generate from config.
 dataset = "tu"
 model_name = "unet"   # Usually overwritten from model/<experiment_name>/config.json when available.
 backbone = "efficientnet-b3"   # Usually overwritten from model/<experiment_name>/config.json when available.
+encoder_weights = "imagenet"  # Usually overwritten from model/<experiment_name>/config.json when available.
 base_dir = "."
 k_folds = 5
 batch_size = 8

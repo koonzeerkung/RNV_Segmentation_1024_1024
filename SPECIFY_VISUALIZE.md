@@ -44,6 +44,7 @@ python specify_visualize.py model/<experiment_name>/weights/1.pth tu 1 --no-amp
 - `--threshold`: sigmoid threshold used before hole-filling. Default is `0.4` unless changed in the parameter section.
 - `--model-name`: model architecture: `unet`, `unetplusplus`, `deeplabv3plus`, or `deeplabv3`.
 - `--backbone`: encoder backbone: `efficientnet-b3`, `inceptionv4`, or `densenet169`.
+- `--encoder-weights`: encoder weights passed to `segmentation-models-pytorch`; use `none` on offline Kaggle notebooks.
 - `--amp` / `--no-amp`: enable or disable automatic mixed precision on CUDA.
 
 The script also uses these constants from the parameter section:

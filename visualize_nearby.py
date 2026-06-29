@@ -22,7 +22,13 @@ from tqdm.auto import tqdm
 from utils.config import dataclass_from_section
 from utils.dataloader import create_dataloaders
 from utils.metrics import compute_binary_mask_metrics, get_postprocessed_mask
-from utils.model_factory import get_model, model_experiment_token, normalize_backbone_name, normalize_model_name
+from utils.model_factory import (
+    get_model,
+    model_experiment_token,
+    normalize_backbone_name,
+    normalize_encoder_weights,
+    normalize_model_name,
+)
 
 
 METRIC_COLUMNS = ("dice", "iou", "precision", "recall", "specificity", "accuracy")
@@ -36,6 +42,7 @@ class VisualizeConfig:
     dataset: str = "dataset_tu"
     model_name: str = "unet"
     backbone: str = "efficientnet-b3"
+    encoder_weights: str | None = "imagenet"
     base_dir: str = "."
     k_folds: int = 5
     batch_size: int = 1
@@ -58,6 +65,7 @@ CONFIG = VisualizeConfig(
     dataset="dataset_tu",
     model_name="unet",
     backbone="efficientnet-b3",
+    encoder_weights="imagenet",
     base_dir=".",
     k_folds=5,
     batch_size=1,
@@ -103,6 +111,11 @@ def parse_args() -> argparse.Namespace:
         default=config.backbone,
         help="Encoder backbone: efficientnet-b3, inceptionv4, or densenet169.",
     )
+    parser.add_argument(
+        "--encoder-weights",
+        default=config.encoder_weights,
+        help="Encoder weights passed to segmentation-models-pytorch. Use '' or 'none' to avoid downloads.",
+    )
     parser.add_argument("--base-dir", default=config.base_dir)
     parser.add_argument("--k-folds", type=int, default=config.k_folds)
     parser.add_argument("--batch-size", type=int, default=config.batch_size)
@@ -136,6 +149,7 @@ def parse_args() -> argparse.Namespace:
     try:
         args.model_name = normalize_model_name(args.model_name)
         args.backbone = normalize_backbone_name(args.backbone)
+        args.encoder_weights = normalize_encoder_weights(args.encoder_weights)
     except ValueError as exc:
         parser.error(str(exc))
     return args
@@ -205,11 +219,21 @@ def load_experiment_config(experiment_dir: Path) -> dict[str, object]:
 
 def resolve_args_from_config(args: argparse.Namespace, experiment_dir: Path) -> argparse.Namespace:
     saved_config = load_experiment_config(experiment_dir)
-    for key in ("dataset", "model_name", "backbone", "base_dir", "k_folds", "batch_size", "threshold"):
+    for key in (
+        "dataset",
+        "model_name",
+        "backbone",
+        "encoder_weights",
+        "base_dir",
+        "k_folds",
+        "batch_size",
+        "threshold",
+    ):
         if key in saved_config:
             setattr(args, key, saved_config[key])
     args.model_name = normalize_model_name(args.model_name)
     args.backbone = normalize_backbone_name(getattr(args, "backbone", "efficientnet-b3"))
+    args.encoder_weights = normalize_encoder_weights(getattr(args, "encoder_weights", "imagenet"))
     return args
 
 
@@ -389,6 +413,7 @@ def evaluate_fold(
         device,
         model_name=args.model_name,
         backbone=args.backbone,
+        encoder_weights=args.encoder_weights,
         in_channels=1,
         out_channels=1,
     )
@@ -649,6 +674,7 @@ def main() -> None:
     print(f"Experiment directory: {experiment_dir}")
     print(f"Model: {args.model_name}")
     print(f"Backbone: {args.backbone}")
+    print(f"Encoder weights: {args.encoder_weights}")
     print(f"Device: {device}")
     print(f"Nearby filter: {'enabled' if args.apply_nearby_filter else 'disabled'}")
 

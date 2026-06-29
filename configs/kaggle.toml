@@ -1,0 +1,52 @@
+# Kaggle notebook example config.
+# Change base_dir to match the dataset slug shown under /kaggle/input.
+# Outputs must go under /kaggle/working so Kaggle can write them.
+
+[train]
+dataset = "dataset_tu"
+model_name = "unet"
+backbone = "efficientnet-b3"
+encoder_weights = ""                 # Empty avoids runtime downloads when Kaggle internet is off.
+augment = true
+aug_multiplier = 10
+base_dir = "/kaggle/input/rnv-segmentation-data"
+k_folds = 5
+epochs = 100
+batch_size = 1
+grad_accum_steps = 8                 # Effective training batch is batch_size * grad_accum_steps.
+lr = 0.0001
+use_amp = true
+use_scheduler = true
+scheduler_factor = 0.5
+scheduler_patience = 3
+min_lr = 0.0000001
+patience = 30
+num_workers = 2
+threshold = 0.5
+best_metric = "dice"
+seed = 42
+model_root = "/kaggle/working/model"
+required_conda_env = ""
+experiment_name = ""
+
+[visualize]
+dataset = "dataset_tu"
+model_name = "unet"
+backbone = "efficientnet-b3"
+encoder_weights = ""                 # Usually overwritten from saved training config.
+base_dir = "/kaggle/input/rnv-segmentation-data"
+k_folds = 5
+batch_size = 1
+threshold = 0.5
+use_amp = true
+model_root = "/kaggle/working/model"
+experiment_name = ""
+required_conda_env = ""
+max_images_per_fold = 0
+summarize_all_datasets = false
+summary_only = false
+setting_suffix = ""
+apply_nearby_filter = false
+points_csv = ""
+points_image_name_template = "nv ({sample_id}).jpg"
+radius_tolerance = 25.0

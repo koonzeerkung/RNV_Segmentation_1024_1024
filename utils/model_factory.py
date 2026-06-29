@@ -69,6 +69,16 @@ def normalize_backbone_name(backbone: str) -> str:
     raise ValueError(f"Unsupported backbone '{backbone}'. Expected one of: {choices}")
 
 
+def normalize_encoder_weights(encoder_weights: str | None) -> str | None:
+    if encoder_weights is None:
+        return None
+
+    normalized = encoder_weights.strip()
+    if normalized.lower() in {"", "none", "null", "false", "no"}:
+        return None
+    return normalized
+
+
 def validate_model_backbone(model_name: str, backbone: str) -> None:
     model_name = normalize_model_name(model_name)
     backbone = normalize_backbone_name(backbone)
@@ -92,19 +102,24 @@ def get_model(
     device: torch.device | str,
     model_name: str = "unet",
     backbone: str = "efficientnet-b3",
+    encoder_weights: str | None = "imagenet",
     in_channels: int = 1,
     out_channels: int = 1,
 ) -> nn.Module:
     normalized_name = normalize_model_name(model_name)
     normalized_backbone = normalize_backbone_name(backbone)
+    normalized_encoder_weights = normalize_encoder_weights(encoder_weights)
     validate_model_backbone(normalized_name, normalized_backbone)
 
     model_class = _ARCHITECTURE_CLASSES[normalized_name]
-    print(f"Loading model: {normalized_name} (encoder: {normalized_backbone})")
+    print(
+        f"Loading model: {normalized_name} "
+        f"(encoder: {normalized_backbone}, encoder_weights: {normalized_encoder_weights})"
+    )
 
     model = model_class(
         encoder_name=normalized_backbone,
-        encoder_weights="imagenet",
+        encoder_weights=normalized_encoder_weights,
         in_channels=in_channels,
         classes=out_channels,
         activation=None,

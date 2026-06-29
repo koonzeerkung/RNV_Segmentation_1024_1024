@@ -21,7 +21,13 @@ from tqdm.auto import tqdm
 from utils.config import dataclass_from_section
 from utils.dataloader import create_dataloaders
 from utils.metrics import BCEDiceLoss, compute_binary_metrics, dice_score_from_logits
-from utils.model_factory import get_model, model_experiment_token, normalize_backbone_name, normalize_model_name
+from utils.model_factory import (
+    get_model,
+    model_experiment_token,
+    normalize_backbone_name,
+    normalize_encoder_weights,
+    normalize_model_name,
+)
 
 
 MASK_METRICS = ("dice", "iou", "precision", "recall", "specificity", "accuracy")
@@ -33,6 +39,7 @@ class ExperimentConfig:
     dataset: str = "dataset_tu"
     model_name: str = "unet"
     backbone: str = "efficientnet-b3"
+    encoder_weights: str | None = "imagenet"
     augment: bool = True
     aug_multiplier: int = 10
     base_dir: str = "."
@@ -61,6 +68,7 @@ CONFIG = ExperimentConfig(
     dataset="dataset_drac",
     model_name="unet",
     backbone="efficientnet-b3",
+    encoder_weights="imagenet",
     augment=True,
     aug_multiplier=10,
     base_dir=".",
@@ -110,6 +118,11 @@ def parse_args() -> argparse.Namespace:
         "--backbone",
         default=config.backbone,
         help="Encoder backbone: efficientnet-b3, inceptionv4, or densenet169.",
+    )
+    parser.add_argument(
+        "--encoder-weights",
+        default=config.encoder_weights,
+        help="Encoder weights passed to segmentation-models-pytorch. Use '' or 'none' to avoid downloads.",
     )
     parser.add_argument("--augment", action=argparse.BooleanOptionalAction, default=config.augment)
     parser.add_argument("--aug-multiplier", type=int, default=config.aug_multiplier)
@@ -162,6 +175,7 @@ def parse_args() -> argparse.Namespace:
     try:
         args.model_name = normalize_model_name(args.model_name)
         args.backbone = normalize_backbone_name(args.backbone)
+        args.encoder_weights = normalize_encoder_weights(args.encoder_weights)
         args.best_metric = normalize_best_metric(args.best_metric)
     except ValueError as exc:
         parser.error(str(exc))
@@ -490,6 +504,7 @@ def run_fold(
         device,
         model_name=args.model_name,
         backbone=args.backbone,
+        encoder_weights=args.encoder_weights,
         in_channels=1,
         out_channels=1,
     )
@@ -642,6 +657,7 @@ def main() -> None:
     print(f"Experiment: {experiment_name}")
     print(f"Model: {args.model_name}")
     print(f"Backbone: {args.backbone}")
+    print(f"Encoder weights: {args.encoder_weights}")
     print(f"Device: {device}")
     print(f"Experiment directory: {experiment_dir}")
     print(f"Weights directory: {weights_dir}")
