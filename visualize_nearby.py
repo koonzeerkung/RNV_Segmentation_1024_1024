@@ -22,6 +22,7 @@ from tqdm.auto import tqdm
 
 from utils.config import dataclass_from_section
 from utils.dataloader import create_dataloaders
+from utils.dataset_points import DATASET_POINTS_CSV, DATASET_POINTS_IMAGE_NAME_TEMPLATE, dataset_short_name
 from utils.metrics import compute_binary_mask_metrics, get_postprocessed_mask
 from utils.model_factory import get_model, model_experiment_token, normalize_backbone_name, normalize_model_name
 
@@ -51,8 +52,8 @@ class VisualizeConfig:
     summary_only: bool = False
     setting_suffix: str | None = None
     apply_nearby_filter: bool = False
-    points_csv: str = ""
-    points_image_name_template: str = "nv ({sample_id}).jpg"
+    points_csv: str = ""                        # "" auto-resolves from `dataset` via utils/dataset_points.py.
+    points_image_name_template: str = ""        # "" auto-resolves from `dataset` via utils/dataset_points.py.
     radius_tolerance: float = 25.0
     size_relaxed_filter: bool = False
     min_keep_area: float = 2000.0
@@ -76,7 +77,7 @@ CONFIG = VisualizeConfig(
     setting_suffix=None,
     apply_nearby_filter=False,
     points_csv="",
-    points_image_name_template="nv ({sample_id}).jpg",
+    points_image_name_template="",
     radius_tolerance=25.0,
     size_relaxed_filter=False,
     min_keep_area=2000.0,
@@ -718,8 +719,15 @@ def main() -> None:
 
     points_df: pd.DataFrame | None = None
     if args.apply_nearby_filter and not args.summary_only:
+        dataset_key = dataset_short_name(args.dataset)
         if not args.points_csv:
-            raise ValueError("Set --points-csv when --nearby-filter is enabled.")
+            args.points_csv = DATASET_POINTS_CSV.get(dataset_key)
+        if not args.points_image_name_template:
+            args.points_image_name_template = DATASET_POINTS_IMAGE_NAME_TEMPLATE.get(dataset_key)
+        if not args.points_csv:
+            raise ValueError(
+                f"Set --points-csv when --nearby-filter is enabled (no default known for dataset '{dataset_key}')."
+            )
         points_path = Path(args.points_csv)
         if not points_path.exists():
             raise FileNotFoundError(f"Could not find the representative points file: {points_path}")

@@ -45,6 +45,8 @@ summary_only = false
 setting_suffix = ""
 apply_nearby_filter = true
 # false writes to model/<experiment_name>/outputs; true writes to model/<experiment_name>/outputs_nearby.
+# points_csv / points_image_name_template left blank: auto-resolved from `dataset`
+# via utils/dataset_points.py. Set explicitly here only to override that default.
 points_csv = ""
-points_image_name_template = "nv ({sample_id}).jpg"
+points_image_name_template = ""
 radius_tolerance = 25.0

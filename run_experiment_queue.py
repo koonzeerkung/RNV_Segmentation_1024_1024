@@ -13,21 +13,13 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 only.
     import tomli as tomllib  # type: ignore[no-redef]
 
+from utils.dataset_points import DATASET_POINTS_CSV, DATASET_POINTS_IMAGE_NAME_TEMPLATE
 from utils.model_factory import normalize_backbone_name, normalize_model_name, validate_model_backbone
 
 
 DEFAULT_ARCHITECTURES = ("deeplabv3plus", "unetplusplus", "unet")
 DEFAULT_BACKBONES = ("efficientnet-b3", "inceptionv4", "densenet169")
 DEFAULT_DATASETS = ("tu", "drac")
-
-DATASET_POINTS_CSV = {
-    "tu": "combined_representative_points.csv",
-    "drac": "combined_representative_points_drac22.csv",
-}
-DATASET_POINTS_IMAGE_NAME_TEMPLATE = {
-    "tu": "nv ({sample_id}).jpg",
-    "drac": "{sample_id}.png",
-}
 
 
 def parse_args() -> argparse.Namespace:

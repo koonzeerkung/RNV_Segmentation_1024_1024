@@ -49,8 +49,11 @@ setting_suffix = ""           # Optional. Shared suffix after "tu_" or "drac_" f
 
 apply_nearby_filter = true
 # false writes to model/<experiment_name>/outputs; true writes to model/<experiment_name>/outputs_nearby.
-points_csv = "combined_representative_points_drac22.csv"        # Required when apply_nearby_filter = true.
-points_image_name_template = "{sample_id}.png"
+# points_csv / points_image_name_template left blank: auto-resolved from `dataset` (tu vs drac)
+# via utils/dataset_points.py, so switching `dataset` above no longer requires editing these too.
+# Set explicitly here only to override the per-dataset default.
+points_csv = ""
+points_image_name_template = ""
 radius_tolerance = 400     # Pixel radius around each representative point.
 
 # Only takes effect when apply_nearby_filter = true. Also keeps components with
