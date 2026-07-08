@@ -17,8 +17,10 @@ from torch.utils.data import DataLoader, Dataset
 
 
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
-PATCH_SIZE = 512
 SOURCE_SIZE = 1024
+INPUT_SIZE = SOURCE_SIZE
+PATCH_SIZE = INPUT_SIZE
+PATCHES_PER_IMAGE = 1
 CLAHE_CLIP_LIMIT = 2.0
 CLAHE_TILE_GRID_SIZE = (8, 8)
 AFFINE_ROTATE_LIMIT = (-15, 15)
@@ -88,12 +90,76 @@ def _is_augment_enabled(augment: str | bool) -> bool:
     raise ValueError("augment must be 'yes', 'no', True, or False")
 
 
-def _find_image_file(directory: Path, sample_id: int) -> Path:
+def find_image_file(directory: Path, sample_id: int) -> Path:
+    candidate_stems = (
+        str(sample_id),
+        f"nv ({sample_id})",
+        f"gt ({sample_id})",
+    )
+    for stem in candidate_stems:
+        for extension in IMAGE_EXTENSIONS:
+            path = directory / f"{stem}{extension}"
+            if path.exists():
+                return path
+
+    id_pattern = re.compile(rf"(?<!\d){sample_id}(?!\d)")
     for extension in IMAGE_EXTENSIONS:
-        path = directory / f"{sample_id}{extension}"
-        if path.exists():
-            return path
+        matches = sorted(
+            path
+            for path in directory.glob(f"*{extension}")
+            if id_pattern.search(path.stem)
+        )
+        if matches:
+            return matches[0]
+
+    # Fall back to positional lookup: sample_id is a 1-based index into the
+    # directory's files sorted by numeric stem value (original DRAC ids
+    # are not renamed to 1..N, so name-based matching above finds nothing).
+    def _numeric_stem_key(path: Path) -> int:
+        return int(path.stem)
+
+    all_images = sorted(
+        (path for extension in IMAGE_EXTENSIONS for path in directory.glob(f"*{extension}")),
+        key=_numeric_stem_key,
+    )
+    if 1 <= sample_id <= len(all_images):
+        return all_images[sample_id - 1]
+
     raise FileNotFoundError(f"No image file found for sample {sample_id} in {directory}")
+
+
+def _resolve_dataset_dir(base_dir: str | Path, dataset_name: str) -> Path:
+    dataset_token = dataset_name.replace("dataset_", "")
+    candidates = [
+        Path(base_dir) / dataset_name,
+        Path(base_dir) / dataset_token.upper(),
+        Path(base_dir) / dataset_token,
+        Path(base_dir) / "dataset" / dataset_token.upper(),
+        Path(base_dir) / "dataset" / dataset_token,
+    ]
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return candidates[0]
+
+
+def _resolve_data_subdir(dataset_dir: Path, subdir_name: str) -> Path:
+    for candidate in (
+        dataset_dir / subdir_name,
+        dataset_dir / subdir_name.upper(),
+        dataset_dir / subdir_name.capitalize(),
+    ):
+        if candidate.is_dir():
+            return candidate
+    return dataset_dir / subdir_name
+
+
+def resolve_dataset_layout(dataset: str, base_dir: str | Path = ".") -> tuple[str, Path, Path, Path]:
+    dataset_name = normalize_dataset_name(dataset)
+    dataset_dir = _resolve_dataset_dir(base_dir, dataset_name)
+    raw_dir = _resolve_data_subdir(dataset_dir, "raw")
+    gt_dir = _resolve_data_subdir(dataset_dir, "gt")
+    return dataset_name, dataset_dir, raw_dir, gt_dir
 
 
 def _split_ids(dataset: str, fold: int) -> dict[SplitName, list[int]]:
@@ -117,10 +183,7 @@ def _split_ids(dataset: str, fold: int) -> dict[SplitName, list[int]]:
 
 def _crop_boxes() -> list[tuple[int, int, int, int]]:
     return [
-        (0, 0, PATCH_SIZE, PATCH_SIZE),
-        (PATCH_SIZE, 0, SOURCE_SIZE, PATCH_SIZE),
-        (0, PATCH_SIZE, PATCH_SIZE, SOURCE_SIZE),
-        (PATCH_SIZE, PATCH_SIZE, SOURCE_SIZE, SOURCE_SIZE),
+        (0, 0, SOURCE_SIZE, SOURCE_SIZE),
     ]
 
 
@@ -164,10 +227,7 @@ def build_train_augmentation(with_replay: bool = False) -> A.Compose | A.ReplayC
 
 
 def build_samples(dataset: str, fold: int, base_dir: str | Path = ".") -> dict[SplitName, list[SliceSample]]:
-    dataset_name = normalize_dataset_name(dataset)
-    dataset_dir = Path(base_dir) / dataset_name
-    raw_dir = dataset_dir / "raw"
-    gt_dir = dataset_dir / "gt"
+    dataset_name, _, raw_dir, gt_dir = resolve_dataset_layout(dataset, base_dir)
 
     if not raw_dir.is_dir():
         raise FileNotFoundError(f"Missing raw directory: {raw_dir}")
@@ -177,8 +237,8 @@ def build_samples(dataset: str, fold: int, base_dir: str | Path = ".") -> dict[S
     samples: dict[SplitName, list[SliceSample]] = {"train": [], "validation": [], "test": []}
     for split, sample_ids in _split_ids(dataset_name, fold).items():
         for sample_id in sample_ids:
-            image_path = _find_image_file(raw_dir, sample_id)
-            mask_path = _find_image_file(gt_dir, sample_id)
+            image_path = find_image_file(raw_dir, sample_id)
+            mask_path = find_image_file(gt_dir, sample_id)
             for patch_id, crop_box in enumerate(_crop_boxes()):
                 samples[split].append(
                     SliceSample(
@@ -200,10 +260,14 @@ def _mask_crop_contains_answer(
     mask_threshold: float = 0.5,
 ) -> bool:
     with Image.open(mask_path) as mask:
-        mask_crop = mask.convert("L").crop(crop_box)
+        mask_image = mask.convert("L")
 
+    if mask_image.size != (SOURCE_SIZE, SOURCE_SIZE):
+        raise ValueError(f"Expected {SOURCE_SIZE}x{SOURCE_SIZE} mask, got {mask_image.size}: {mask_path}")
+
+    mask_crop = mask_image.crop(crop_box)
     if mask_crop.size != (PATCH_SIZE, PATCH_SIZE):
-        raise ValueError(f"Expected {PATCH_SIZE}x{PATCH_SIZE} mask patch, got {mask_crop.size}: {mask_path}")
+        raise ValueError(f"Expected {INPUT_SIZE}x{INPUT_SIZE} mask, got {mask_crop.size}: {mask_path}")
 
     mask_array = np.asarray(mask_crop, dtype=np.uint8).astype(np.float32) / 255.0
     return bool(np.any(mask_array >= mask_threshold))
@@ -213,7 +277,7 @@ def filter_samples_with_answers(
     samples: list[SliceSample],
     mask_threshold: float = 0.5,
 ) -> list[SliceSample]:
-    """Keep only samples whose ground-truth mask crop contains foreground."""
+    """Keep only samples whose ground-truth mask contains foreground."""
 
     return [
         sample
@@ -223,7 +287,7 @@ def filter_samples_with_answers(
 
 
 class KFoldSliceDataset(Dataset):
-    """Dataset that loads grayscale 512x512 raw/gt slices from one k-fold split."""
+    """Dataset that loads grayscale 1024x1024 raw/gt images from one k-fold split."""
 
     def __init__(
         self,
@@ -248,6 +312,30 @@ class KFoldSliceDataset(Dataset):
         if self.aug_multiplier < 1:
             raise ValueError("aug_multiplier must be at least 1")
 
+        # Pre-load every unique image and mask into RAM so __getitem__ never touches disk.
+        # Datasets are small (~27–42 images × ~2 MB each), so total cost is well under 200 MB.
+        # All Albumentations transforms and _image_to_tensor/_mask_to_tensor create new arrays,
+        # so sharing these read-only views across aug_multiplier copies is safe.
+        self._image_cache: dict[Path, np.ndarray] = {}
+        self._mask_cache: dict[Path, np.ndarray] = {}
+        for sample in self.samples:
+            if sample.image_path not in self._image_cache:
+                with Image.open(sample.image_path) as img:
+                    arr = np.array(img.convert("L"), dtype=np.uint8)
+                if arr.shape != (SOURCE_SIZE, SOURCE_SIZE):
+                    raise ValueError(
+                        f"Expected {SOURCE_SIZE}x{SOURCE_SIZE} image, got {arr.shape}: {sample.image_path}"
+                    )
+                self._image_cache[sample.image_path] = arr
+            if sample.mask_path not in self._mask_cache:
+                with Image.open(sample.mask_path) as mask_file:
+                    arr = np.array(mask_file.convert("L"), dtype=np.uint8)
+                if arr.shape != (SOURCE_SIZE, SOURCE_SIZE):
+                    raise ValueError(
+                        f"Expected {SOURCE_SIZE}x{SOURCE_SIZE} mask, got {arr.shape}: {sample.mask_path}"
+                    )
+                self._mask_cache[sample.mask_path] = arr
+
     def __len__(self) -> int:
         return len(self.samples) * self.aug_multiplier
 
@@ -255,16 +343,9 @@ class KFoldSliceDataset(Dataset):
         sample = self.samples[index // self.aug_multiplier]
         augment_index = index % self.aug_multiplier
 
-        image = Image.open(sample.image_path).convert("L").crop(sample.crop_box)
-        mask = Image.open(sample.mask_path).convert("L").crop(sample.crop_box)
-
-        if image.size != (PATCH_SIZE, PATCH_SIZE):
-            raise ValueError(f"Expected {PATCH_SIZE}x{PATCH_SIZE} image patch, got {image.size}: {sample.image_path}")
-        if mask.size != (PATCH_SIZE, PATCH_SIZE):
-            raise ValueError(f"Expected {PATCH_SIZE}x{PATCH_SIZE} mask patch, got {mask.size}: {sample.mask_path}")
-
-        image_array = np.asarray(image, dtype=np.uint8)
-        mask_array = np.asarray(mask, dtype=np.uint8)
+        left, top, right, bottom = sample.crop_box
+        image_array = self._image_cache[sample.image_path][top:bottom, left:right]
+        mask_array = self._mask_cache[sample.mask_path][top:bottom, left:right]
 
         if self.augment_enabled and augment_index:
             image_array, mask_array, augmentation = self._apply_augmentation(image_array, mask_array)
@@ -431,12 +512,18 @@ def get_dataloader(
 
 __all__ = [
     "KFoldSliceDataset",
+    "INPUT_SIZE",
+    "PATCHES_PER_IMAGE",
+    "PATCH_SIZE",
     "SliceSample",
+    "SOURCE_SIZE",
     "build_train_augmentation",
     "build_samples",
     "create_dataloaders",
     "filter_samples_with_answers",
+    "find_image_file",
     "get_dataloader",
     "get_kfold_chunks",
     "normalize_dataset_name",
+    "resolve_dataset_layout",
 ]

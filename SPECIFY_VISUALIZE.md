@@ -42,7 +42,8 @@ python specify_visualize.py model/<experiment_name>/weights/1.pth tu 1 --no-amp
 
 - `--base-dir`: project/data root that contains `dataset_tu` and `dataset_drac`. Default is `.`.
 - `--threshold`: sigmoid threshold used before hole-filling. Default is `0.4` unless changed in the parameter section.
-- `--model-name`: model architecture. The current pipeline supports `unet`.
+- `--model-name`: model architecture: `unet`, `unetplusplus`, `deeplabv3plus`, or `deeplabv3`.
+- `--backbone`: encoder backbone: `efficientnet-b3`, `inceptionv4`, or `densenet169`.
 - `--amp` / `--no-amp`: enable or disable automatic mixed precision on CUDA.
 
 The script also uses these constants from the parameter section:
@@ -77,7 +78,7 @@ The PNG contains input, ground truth, prediction, error map, and confusion matri
 
 ## Metric Notes
 
-`specify_visualize.py` uses the same patch layout as the main pipeline: each `1024x1024` image is split into four `512x512` patches, predicted patch-by-patch, stitched back to `1024x1024`, thresholded, and hole-filled.
+`specify_visualize.py` uses the same full-image layout as the main pipeline: each `1024x1024` image is predicted in one forward pass, thresholded, and hole-filled.
 
 If `extra_output/*_metrics.csv` differs slightly from `outputs/test_fold_*/per_image_metrics.csv`, first check whether `outputs/` is stale. The full visualizer may have been run earlier with older code or settings. Refresh normal outputs with:
 

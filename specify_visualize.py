@@ -15,9 +15,9 @@ import numpy as np
 import torch
 from PIL import Image
 
-from utils.dataloader import IMAGE_EXTENSIONS, PATCH_SIZE, SOURCE_SIZE, normalize_dataset_name
+from utils.dataloader import SOURCE_SIZE, find_image_file, resolve_dataset_layout
 from utils.metrics import compute_binary_mask_metrics, get_postprocessed_mask
-from utils.model_factory import get_model, normalize_model_name
+from utils.model_factory import get_model, normalize_backbone_name, normalize_model_name
 
 
 # =========================
@@ -30,6 +30,7 @@ DEFAULT_SAMPLE_ID: int | None = 1
 DEFAULT_BASE_DIR: str | None = "."
 DEFAULT_THRESHOLD: float | None = 0.4
 DEFAULT_MODEL_NAME: str | None = None
+DEFAULT_BACKBONE: str | None = None
 DEFAULT_USE_AMP = True
 OUTPUT_SUBDIR = "extra_output"
 SAVE_PREDICTION_NPY = True
@@ -61,7 +62,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--base-dir", default=DEFAULT_BASE_DIR, help="Project/data root containing dataset_tu and dataset_drac.")
     parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
-    parser.add_argument("--model-name", default=DEFAULT_MODEL_NAME, help="Model architecture. Current pipeline supports unet.")
+    parser.add_argument(
+        "--model-name",
+        default=DEFAULT_MODEL_NAME,
+        help="Model architecture: unet, unetplusplus, deeplabv3plus, or deeplabv3.",
+    )
+    parser.add_argument(
+        "--backbone",
+        default=DEFAULT_BACKBONE,
+        help="Encoder backbone: efficientnet-b3, inceptionv4, or densenet169.",
+    )
     parser.add_argument("--amp", "--use-amp", dest="use_amp", action=argparse.BooleanOptionalAction, default=DEFAULT_USE_AMP)
     args = parser.parse_args()
     missing = [
@@ -74,6 +84,8 @@ def parse_args() -> argparse.Namespace:
         parser.error(f"Missing required value(s): {joined}. Set them in the parameter section or pass them as CLI arguments.")
     if args.model_name:
         args.model_name = normalize_model_name(args.model_name)
+    if args.backbone:
+        args.backbone = normalize_backbone_name(args.backbone)
     return args
 
 
@@ -109,23 +121,6 @@ def load_experiment_config(experiment_dir: Path) -> dict[str, Any]:
     return json.loads(config_path.read_text(encoding="utf-8"))
 
 
-def find_image_file(directory: Path, sample_id: int) -> Path:
-    for extension in IMAGE_EXTENSIONS:
-        path = directory / f"{sample_id}{extension}"
-        if path.exists():
-            return path
-    raise FileNotFoundError(f"No image file found for sample {sample_id} in {directory}")
-
-
-def crop_boxes() -> list[tuple[int, int, int, int]]:
-    return [
-        (0, 0, PATCH_SIZE, PATCH_SIZE),
-        (PATCH_SIZE, 0, SOURCE_SIZE, PATCH_SIZE),
-        (0, PATCH_SIZE, PATCH_SIZE, SOURCE_SIZE),
-        (PATCH_SIZE, PATCH_SIZE, SOURCE_SIZE, SOURCE_SIZE),
-    ]
-
-
 def image_to_tensor(image: Image.Image) -> torch.Tensor:
     array = np.asarray(image.convert("L"), dtype=np.uint8).astype(np.float32) / 255.0
     return torch.from_numpy(array).unsqueeze(0).unsqueeze(0).contiguous()
@@ -135,12 +130,6 @@ def mask_to_tensor(mask: Image.Image, threshold: float = 0.5) -> torch.Tensor:
     array = np.asarray(mask.convert("L"), dtype=np.uint8).astype(np.float32) / 255.0
     array = (array >= threshold).astype(np.float32)
     return torch.from_numpy(array).unsqueeze(0).unsqueeze(0).contiguous()
-
-
-def stitch_patch(patch: torch.Tensor, patch_id: int, full: torch.Tensor) -> None:
-    y = 0 if patch_id < 2 else PATCH_SIZE
-    x = 0 if patch_id % 2 == 0 else PATCH_SIZE
-    full[:, :, y : y + PATCH_SIZE, x : x + PATCH_SIZE] = patch
 
 
 def make_confusion_counts(pred: np.ndarray, target: np.ndarray) -> dict[str, int]:
@@ -247,12 +236,11 @@ def main() -> None:
     base_dir = args.base_dir if args.base_dir is not None else str(config.get("base_dir", "."))
     threshold = args.threshold if args.threshold is not None else float(config.get("threshold", 0.5))
     model_name = args.model_name or normalize_model_name(str(config.get("model_name", "unet")))
+    backbone = args.backbone or normalize_backbone_name(str(config.get("backbone", "efficientnet-b3")))
 
-    dataset_name = normalize_dataset_name(args.dataset)
-    dataset_dir = Path(base_dir) / dataset_name
-    raw_path = find_image_file(dataset_dir / "raw", args.sample_id)
+    dataset_name, _, raw_dir, gt_dir = resolve_dataset_layout(args.dataset, base_dir)
+    raw_path = find_image_file(raw_dir, args.sample_id)
     gt_path: Path | None = None
-    gt_dir = dataset_dir / "gt"
     if gt_dir.is_dir():
         try:
             gt_path = find_image_file(gt_dir, args.sample_id)
@@ -271,27 +259,22 @@ def main() -> None:
                 raise ValueError(f"Expected {SOURCE_SIZE}x{SOURCE_SIZE} mask, got {gt_image.size}: {gt_path}")
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = get_model(device, model_name=model_name, in_channels=1, out_channels=1)
+        model = get_model(device, model_name=model_name, backbone=backbone, in_channels=1, out_channels=1)
         model.load_state_dict(torch.load(weight_path, map_location=device))
         model.eval()
 
-        full_input = torch.zeros((1, 1, SOURCE_SIZE, SOURCE_SIZE), dtype=torch.float32)
-        full_mask = torch.zeros((1, 1, SOURCE_SIZE, SOURCE_SIZE), dtype=torch.float32) if gt_image is not None else None
-        full_logits = torch.zeros((1, 1, SOURCE_SIZE, SOURCE_SIZE), dtype=torch.float32)
-
         use_amp = bool(args.use_amp and device.type == "cuda")
-        for patch_id, crop_box in enumerate(crop_boxes()):
-            image_patch = raw_image.crop(crop_box)
-            image_tensor = image_to_tensor(image_patch)
-            with torch.amp.autocast(device_type=device.type, enabled=use_amp):
-                logits = get_logits(model, image_tensor.to(device, non_blocking=True))
+        image_tensor = image_to_tensor(raw_image)
+        with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+            logits = get_logits(model, image_tensor.to(device, non_blocking=True))
+        if logits.shape[-2:] != image_tensor.shape[-2:]:
+            raise ValueError(
+                f"Expected model output spatial size {tuple(image_tensor.shape[-2:])}, got {tuple(logits.shape[-2:])}"
+            )
 
-            stitch_patch(image_tensor.cpu(), patch_id, full_input)
-            stitch_patch(logits.float().detach().cpu(), patch_id, full_logits)
-
-            if gt_image is not None and full_mask is not None:
-                mask_tensor = mask_to_tensor(gt_image.crop(crop_box))
-                stitch_patch(mask_tensor, patch_id, full_mask)
+        full_input = image_tensor.cpu()
+        full_mask = mask_to_tensor(gt_image) if gt_image is not None else None
+        full_logits = logits.float().detach().cpu()
 
         if gt_image is not None:
             gt_image.close()
@@ -329,6 +312,8 @@ def main() -> None:
     print(f"Weight: {weight_path}")
     print(f"Dataset: {dataset_name}")
     print(f"Sample ID: {args.sample_id}")
+    print(f"Model: {model_name}")
+    print(f"Backbone: {backbone}")
     print(f"Device: {device}")
     print(f"Threshold: {threshold:g}")
     if metrics is not None:

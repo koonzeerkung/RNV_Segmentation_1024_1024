@@ -114,16 +114,16 @@ Validation wraps around after fold 5, so `fold=5` uses fold 1 as validation.
 
 - Raw images are loaded as grayscale.
 - Ground-truth masks are loaded as grayscale.
-- Each 1024x1024 image/mask pair is sliced into four 512x512 patches.
-- Returned `image` tensors are float tensors shaped `[1, 512, 512]`, normalized to `[0, 1]`.
-- Returned `mask` tensors are float tensors shaped `[1, 512, 512]`, binarized with threshold `0.5`.
+- Each 1024x1024 image/mask pair is used as one full-size sample.
+- Returned `image` tensors are float tensors shaped `[1, 1024, 1024]`, normalized to `[0, 1]`.
+- Returned `mask` tensors are float tensors shaped `[1, 1024, 1024]`, binarized with threshold `0.5`.
 
 When `include_metadata=True`, each batch item also includes metadata:
 
 - `dataset`
 - `split`
 - `sample_id`
-- `patch_id`
+- `patch_id` (kept for compatibility; always `0` for full-image samples)
 - `augment_index`
 - `augmentation`
 - `image_path`
@@ -136,10 +136,10 @@ When `include_metadata=False`, batches contain only `image` and `mask`. `main.py
 Augmentation is applied only to the training split.
 
 - `augment="no"` disables augmentation and ignores `aug_multiplier`.
-- `augment="yes"` repeats each training patch `aug_multiplier` times and applies randomized Albumentations transforms to repeated samples.
-- `augment_index=0` is the original patch.
+- `augment="yes"` repeats each training image `aug_multiplier` times and applies randomized Albumentations transforms to repeated samples.
+- `augment_index=0` is the original image.
 - `augment_index>0` uses the training augmentation pipeline.
-- Training patches whose ground-truth mask contains no foreground pixels are removed before the augmentation multiplier is applied. Validation and test patches are not filtered.
+- Training images whose ground-truth mask contains no foreground pixels are removed before the augmentation multiplier is applied. Validation and test images are not filtered.
 
 The training augmentation pipeline uses only the requested techniques:
 
@@ -193,7 +193,7 @@ It uses the project utility modules directly:
 Default behavior:
 
 - trains the dataset selected in the editable config
-- trains `model_name="unet"`
+- trains the selected architecture/backbone pair, defaulting to `model_name="unet"` and `backbone="efficientnet-b3"`
 - uses 5 folds
 - uses augmentation with `aug_multiplier=10`
 - trains for up to the configured number of epochs per fold
@@ -204,10 +204,10 @@ Default behavior:
 - saves the resolved configuration to `model/<experiment_name>/config.json`
 - lets `best_metric` choose the validation metric for best-model saving, early stopping, and scheduler plateau detection
 - prints split sample counts for every fold:
-  - train base patches after foreground filtering
-  - train patches after augmentation multiplier
-  - validation patches
-  - test patches
+  - train base images after foreground filtering
+  - train images after augmentation multiplier
+  - validation images
+  - test images
 
 Experiment attributes are centralized near the top of `main.py`:
 
@@ -215,6 +215,7 @@ Experiment attributes are centralized near the top of `main.py`:
 CONFIG = ExperimentConfig(
     dataset="dataset_drac",
     model_name="unet",
+    backbone="efficientnet-b3",
     augment=True,
     aug_multiplier=10,
     epochs=100,
@@ -273,7 +274,9 @@ python main.py --experiment-name tu_trial_01
 
 Model selection:
 
-- `model_name="unet"` uses the EfficientNet-B3 U-Net from `segmentation_models_pytorch`.
+- `model_name` selects the architecture: `unet`, `unetplusplus`, `deeplabv3plus`, or `deeplabv3`.
+- `backbone` selects the encoder: `efficientnet-b3`, `inceptionv4`, or `densenet169`.
+- DeepLab architectures require a dilation-capable encoder in `segmentation_models_pytorch`; use `backbone="efficientnet-b3"` for DeepLab. Use `unet` or `unetplusplus` with `inceptionv4`/`densenet169`.
 - `grad_accum_steps` keeps a larger effective training batch while the CUDA mini-batch stays small.
 
 The script expects batches from the dataloader as dictionaries with `image` and `mask` tensors. Validation metrics use hole-filled postprocessed predictions. Training Dice uses thresholded predictions without hole filling to keep per-batch training feedback lightweight.
@@ -323,11 +326,11 @@ Default behavior:
 
 - reads fold weights from `model/<experiment_name>/weights/<fold>.pth`
 - rebuilds the test dataloader for each fold
-- stitches four 512x512 test patches back into one 1024x1024 image
+- runs each 1024x1024 test image through the model directly
 - applies sigmoid, thresholding, and hole filling to predictions
 - reuses that postprocessed mask for both metrics and saved images unless nearby representative-point filtering is enabled
 - optionally keeps predicted connected components that are within a configured pixel radius of a representative localization point
-- keeps stitched 1024x1024 buffers on CPU so GPU memory is used only for active model batches
+- moves completed 1024x1024 predictions to CPU before metric and visualization work
 - saves normal full-image visualization panels to `model/<experiment_name>/outputs/test_fold_<fold>/`
 - saves nearby filtered panels to `model/<experiment_name>/outputs_nearby/test_fold_<fold>/`
 - saves per-image metrics to `per_image_metrics.csv`
@@ -362,7 +365,7 @@ points_image_name_template = "nv ({sample_id}).jpg"
 radius_tolerance = 25.0
 ```
 
-The points CSV must contain `image_number`, `x`, and `y` columns. CSV coordinates use `x` as column and `y` as row in the stitched 1024x1024 image. `points_image_name_template` controls how a dataset `sample_id` maps to the CSV `image_number` value. `radius_tolerance` controls how close a predicted component must be to at least one point.
+The points CSV must contain `image_number`, `x`, and `y` columns. CSV coordinates use `x` as column and `y` as row in the 1024x1024 image. `points_image_name_template` controls how a dataset `sample_id` maps to the CSV `image_number` value. `radius_tolerance` controls how close a predicted component must be to at least one point.
 
 Output separation:
 

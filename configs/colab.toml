@@ -4,6 +4,7 @@
 [train]
 dataset = "dataset_tu"
 model_name = "unet"
+backbone = "efficientnet-b3"
 augment = true
 aug_multiplier = 10
 base_dir = "."                         # Folder containing dataset_tu/ and dataset_drac/
@@ -29,6 +30,7 @@ experiment_name = ""
 [visualize]
 dataset = "dataset_drac"
 model_name = "unet"                  # Usually overwritten from saved training config.
+backbone = "efficientnet-b3"         # Usually overwritten from saved training config.
 base_dir = "."
 k_folds = 5
 batch_size = 1
@@ -41,7 +43,7 @@ max_images_per_fold = 0
 summarize_all_datasets = false
 summary_only = false
 setting_suffix = ""
-apply_nearby_filter = false
+apply_nearby_filter = true
 # false writes to model/<experiment_name>/outputs; true writes to model/<experiment_name>/outputs_nearby.
 points_csv = ""
 points_image_name_template = "nv ({sample_id}).jpg"

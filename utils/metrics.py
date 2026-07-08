@@ -60,17 +60,16 @@ def dice_loss_from_logits(
 def get_postprocessed_mask(pred_logits: torch.Tensor, threshold: float = 0.5) -> torch.Tensor:
     """Convert logits to a binary mask and apply hole filling."""
 
-    preds = torch.sigmoid(pred_logits)
-    preds = (preds > threshold).float()
+    # Transfer as bool (1 byte/pixel) rather than float32 (4 bytes/pixel) — 4x smaller GPU→CPU copy.
+    # binary_fill_holes operates on bool natively; numpy coerces back to float32 on assignment.
+    preds = (torch.sigmoid(pred_logits) > threshold).detach().cpu().numpy()
 
-    preds_np = preds.detach().cpu().numpy()
-    filled_np = np.zeros_like(preds_np, dtype=np.float32)
+    filled = np.empty(preds.shape, dtype=np.float32)
+    for b in range(preds.shape[0]):
+        for c in range(preds.shape[1]):
+            filled[b, c] = binary_fill_holes(preds[b, c])
 
-    for b in range(preds_np.shape[0]):
-        for c in range(preds_np.shape[1]):
-            filled_np[b, c] = binary_fill_holes(preds_np[b, c]).astype(np.float32)
-
-    return torch.from_numpy(filled_np).to(pred_logits.device)
+    return torch.from_numpy(filled).to(pred_logits.device)
 
 
 def get_binary_mask(pred_logits: torch.Tensor, threshold: float = 0.5) -> torch.Tensor:

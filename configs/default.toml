@@ -4,12 +4,16 @@
 #   ./run_visualize.sh --config configs/my_experiment.toml --experiment-name <name>
 
 [train]
-dataset = "tu"      # "dataset_tu", "dataset_drac", "tu", or "drac"
-model_name = "unet"
+dataset = "drac"      # "dataset_tu", "dataset_drac", "tu", or "drac"
+model_name = "unet"        # "unet", "unetplusplus", "deeplabv3plus", "deeplabv3", "frnet", or "xgboost".
+backbone = "efficientnet-b3"  # "efficientnet-b3", "inceptionv4", or "densenet169". Ignored for "frnet"/"xgboost".
+# FRNet keeps full 1024x1024 resolution (~5.4 GB/sample at AMP). Use batch_size=2 grad_accum_steps=4
+# (or batch_size=4 grad_accum_steps=2) to fit GPU memory while keeping effective batch 8.
 augment = true
 aug_multiplier = 10
 base_dir = "."
 k_folds = 5
+only_fold = 5        # uncomment to train just this fold (1-indexed) instead of all k_folds
 epochs = 100
 batch_size = 8
 grad_accum_steps = 4           # Effective training batch is batch_size * grad_accum_steps.
@@ -17,28 +21,29 @@ lr = 0.0001
 use_amp = true
 use_scheduler = true
 scheduler_factor = 0.5
-scheduler_patience = 3
+scheduler_patience = 5
 min_lr = 0.0000001
-patience = 30
-num_workers = 2
-threshold = 0.5
+patience = 25
+num_workers = 4
+threshold = 0.35
 best_metric = "dice"              # Best-model metric: loss, dice, iou, precision, recall, specificity, or accuracy.
-seed = 42
+seed = 69
 model_root = "model"
-required_conda_env = "eeg"        # Optional. Set to your conda preference only if you want to enforce that env.
-experiment_name = "tu_0.5thresold_100epoch_efficientnet"          # Empty string means auto-generate from config.
+required_conda_env = "rnv"        # Optional. Set to your conda preference only if you want to enforce that env.
+experiment_name = "drac_unet_effib3_t0.35"          # Empty string means auto-generate from config.
 
 [visualize]
-dataset = "tu"
+dataset = "drac"
 model_name = "unet"   # Usually overwritten from model/<experiment_name>/config.json when available.
+backbone = "efficientnet-b3"   # Usually overwritten from model/<experiment_name>/config.json when available.
 base_dir = "."
 k_folds = 5
 batch_size = 8
-threshold = 0.4
+threshold = 0.3
 use_amp = true
 model_root = "model"
-experiment_name = "tu_0.4thresold_100epoch_efficientnet"          # Empty string means auto-generate from config. Use the training experiment name.
-required_conda_env = "eeg"        # Optional. Set to "eeg" only if you want to enforce that env.
+experiment_name = "drac_unet_efficientnetb3"          # Empty string means auto-generate from config. Use the training experiment name.
+required_conda_env = "rnv"        # Optional. Set to "eeg" only if you want to enforce that env.
 max_images_per_fold = 0       # 0 means visualize all test images.
 summarize_all_datasets = false
 summary_only = false
@@ -46,6 +51,14 @@ setting_suffix = ""           # Optional. Shared suffix after "tu_" or "drac_" f
 
 apply_nearby_filter = true
 # false writes to model/<experiment_name>/outputs; true writes to model/<experiment_name>/outputs_nearby.
-points_csv = "combined_representative_points.csv"               # Required when apply_nearby_filter = true.
-points_image_name_template = "nv ({sample_id}).jpg"
-radius_tolerance = 200       # Pixel radius around each representative point.
+points_csv = "combined_representative_points_drac22.csv"        # Required when apply_nearby_filter = true.
+points_image_name_template = "{sample_id}.png"
+radius_tolerance = 400     # Pixel radius around each representative point.
+
+# Only takes effect when apply_nearby_filter = true. Also keeps components with
+# area >= min_keep_area even without a nearby point, instead of discarding them outright.
+# Evaluated standalone in post_processing/filter_policy/: +0.026 mean Dice on DRAC at
+# min_keep_area=2000, but net negative on TU (too much background noise crosses the
+# size threshold) -- leave false for TU experiments.
+size_relaxed_filter = false
+min_keep_area = 3000

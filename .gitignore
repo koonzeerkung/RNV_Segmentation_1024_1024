@@ -2,13 +2,13 @@ __pycache__/
 *.py[cod]
 .ipynb_checkpoints/
 
-model/*/weights/
-model/*/outputs/
-model/*/outputs_nearby/
-model/*/outputs_lieswithin/
-model/*/extra_output/
-model/*/config.json
-model/dataset_summaries/
+model/
 
 output/
 .DS_Store
+
+dataset/
+dataset_tu/
+dataset_drac/
+dataset_folds.zip
+*.pdf

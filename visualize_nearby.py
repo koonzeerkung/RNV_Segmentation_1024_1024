@@ -16,25 +16,28 @@ from matplotlib.colors import ListedColormap
 import numpy as np
 import pandas as pd
 import torch
+from scipy import ndimage
 from scipy.ndimage import distance_transform_edt, label
 from tqdm.auto import tqdm
 
 from utils.config import dataclass_from_section
-from utils.dataloader import PATCH_SIZE, SOURCE_SIZE, create_dataloaders
+from utils.dataloader import create_dataloaders
 from utils.metrics import compute_binary_mask_metrics, get_postprocessed_mask
-from utils.model_factory import get_model, model_experiment_token, normalize_model_name
+from utils.model_factory import get_model, model_experiment_token, normalize_backbone_name, normalize_model_name
 
 
 METRIC_COLUMNS = ("dice", "iou", "precision", "recall", "specificity", "accuracy")
 DATASET_PREFIXES = ("tu", "drac")
 STANDARD_OUTPUT_DIR = "outputs"
 NEARBY_OUTPUT_DIR = "outputs_nearby"
+NEARBY_SIZE_RELAXED_OUTPUT_DIR = "outputs_nearby_sizerelaxed"
 
 
 @dataclass(frozen=True)
 class VisualizeConfig:
     dataset: str = "dataset_tu"
     model_name: str = "unet"
+    backbone: str = "efficientnet-b3"
     base_dir: str = "."
     k_folds: int = 5
     batch_size: int = 1
@@ -51,11 +54,14 @@ class VisualizeConfig:
     points_csv: str = ""
     points_image_name_template: str = "nv ({sample_id}).jpg"
     radius_tolerance: float = 25.0
+    size_relaxed_filter: bool = False
+    min_keep_area: float = 2000.0
 
 
 CONFIG = VisualizeConfig(
     dataset="dataset_tu",
     model_name="unet",
+    backbone="efficientnet-b3",
     base_dir=".",
     k_folds=5,
     batch_size=1,
@@ -72,6 +78,8 @@ CONFIG = VisualizeConfig(
     points_csv="",
     points_image_name_template="nv ({sample_id}).jpg",
     radius_tolerance=25.0,
+    size_relaxed_filter=False,
+    min_keep_area=2000.0,
 )
 
 
@@ -91,7 +99,16 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate trained folds and save prediction visualizations.")
     parser.add_argument("--config", default=config_args.config)
     parser.add_argument("--dataset", default=config.dataset, choices=["tu", "drac", "dataset_tu", "dataset_drac"])
-    parser.add_argument("--model-name", default=config.model_name, help="Model architecture: unet.")
+    parser.add_argument(
+        "--model-name",
+        default=config.model_name,
+        help="Model architecture: unet, unetplusplus, deeplabv3plus, or deeplabv3.",
+    )
+    parser.add_argument(
+        "--backbone",
+        default=config.backbone,
+        help="Encoder backbone: efficientnet-b3, inceptionv4, or densenet169.",
+    )
     parser.add_argument("--base-dir", default=config.base_dir)
     parser.add_argument("--k-folds", type=int, default=config.k_folds)
     parser.add_argument("--batch-size", type=int, default=config.batch_size)
@@ -115,6 +132,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--points-csv", default=config.points_csv)
     parser.add_argument("--points-image-name-template", default=config.points_image_name_template)
     parser.add_argument("--radius-tolerance", type=float, default=config.radius_tolerance)
+    parser.add_argument(
+        "--size-relaxed-filter",
+        dest="size_relaxed_filter",
+        action=argparse.BooleanOptionalAction,
+        default=config.size_relaxed_filter,
+        help=(
+            "Only takes effect when --nearby-filter is also on. Also keep components with "
+            "area >= min_keep_area even without a nearby point, instead of the strict "
+            "point-only rule."
+        ),
+    )
+    parser.add_argument("--min-keep-area", type=float, default=config.min_keep_area)
     args = parser.parse_args(remaining_args)
     if args.experiment_name == "":
         args.experiment_name = None
@@ -124,6 +153,7 @@ def parse_args() -> argparse.Namespace:
         args.points_csv = None
     try:
         args.model_name = normalize_model_name(args.model_name)
+        args.backbone = normalize_backbone_name(args.backbone)
     except ValueError as exc:
         parser.error(str(exc))
     return args
@@ -165,7 +195,7 @@ def _format_float(value: float) -> str:
 def build_experiment_name(args: argparse.Namespace) -> str:
     dataset_name = str(args.dataset).replace("dataset_", "")
     amp_name = "amp" if args.use_amp else "fp32"
-    model_token = model_experiment_token(args.model_name)
+    model_token = model_experiment_token(args.model_name, args.backbone)
     return (
         f"{dataset_name}_raw_with_augment_augx10_folds{args.k_folds}_ep100_bs8_lr0p0001_"
         f"{amp_name}_plateau_{model_token}"
@@ -193,36 +223,22 @@ def load_experiment_config(experiment_dir: Path) -> dict[str, object]:
 
 def resolve_args_from_config(args: argparse.Namespace, experiment_dir: Path) -> argparse.Namespace:
     saved_config = load_experiment_config(experiment_dir)
-    for key in ("dataset", "model_name", "base_dir", "k_folds", "batch_size", "threshold"):
+    for key in ("dataset", "model_name", "backbone", "base_dir", "k_folds", "batch_size", "threshold"):
         if key in saved_config:
             setattr(args, key, saved_config[key])
     args.model_name = normalize_model_name(args.model_name)
+    args.backbone = normalize_backbone_name(getattr(args, "backbone", "efficientnet-b3"))
     return args
 
 
-def get_output_subdir(apply_nearby_filter: bool) -> str:
-    return NEARBY_OUTPUT_DIR if apply_nearby_filter else STANDARD_OUTPUT_DIR
+def get_output_subdir(apply_nearby_filter: bool, size_relaxed_filter: bool = False) -> str:
+    if not apply_nearby_filter:
+        return STANDARD_OUTPUT_DIR
+    return NEARBY_SIZE_RELAXED_OUTPUT_DIR if size_relaxed_filter else NEARBY_OUTPUT_DIR
 
 
-def get_outputs_dir(experiment_dir: Path, apply_nearby_filter: bool) -> Path:
-    return experiment_dir / get_output_subdir(apply_nearby_filter)
-
-
-def stitch_batch(
-    image: torch.Tensor,
-    mask: torch.Tensor,
-    logits: torch.Tensor,
-    patch_id: int,
-    full_input: torch.Tensor,
-    full_mask: torch.Tensor,
-    full_logits: torch.Tensor,
-) -> None:
-    y = 0 if patch_id < 2 else PATCH_SIZE
-    x = 0 if patch_id % 2 == 0 else PATCH_SIZE
-
-    full_input[:, :, y : y + PATCH_SIZE, x : x + PATCH_SIZE] = image
-    full_mask[:, :, y : y + PATCH_SIZE, x : x + PATCH_SIZE] = mask
-    full_logits[:, :, y : y + PATCH_SIZE, x : x + PATCH_SIZE] = logits
+def get_outputs_dir(experiment_dir: Path, apply_nearby_filter: bool, size_relaxed_filter: bool = False) -> Path:
+    return experiment_dir / get_output_subdir(apply_nearby_filter, size_relaxed_filter)
 
 
 def make_confusion_counts(pred: np.ndarray, target: np.ndarray) -> dict[str, int]:
@@ -249,7 +265,7 @@ def filter_by_representative_points(
 
     img_points = points_df[points_df["image_number"] == image_name]
     if img_points.empty:
-        return torch.zeros_like(pred_mask), None
+        return pred_mask, None
 
     # CSV coordinates are expected as x=column and y=row.
     ref_points = img_points[["y", "x"]].to_numpy(dtype=np.float64)
@@ -273,6 +289,63 @@ def filter_by_representative_points(
     unique_valid_blobs = np.unique(valid_blob_ids)
 
     clean_np = np.isin(labeled_mask, unique_valid_blobs).astype(np.uint8)
+    cleaned_tensor = torch.from_numpy(clean_np).unsqueeze(0).unsqueeze(0).to(pred_mask.device, dtype=pred_mask.dtype)
+    return cleaned_tensor, ref_points
+
+
+def filter_by_points_or_size(
+    pred_mask: torch.Tensor,
+    image_name: str,
+    points_df: pd.DataFrame,
+    radius_tolerance: float,
+    min_keep_area: float,
+) -> tuple[torch.Tensor, np.ndarray | None]:
+    """
+    Size-relaxed variant of filter_by_representative_points: keep a component
+    if it is within `radius_tolerance` of a representative point (as above)
+    OR its area is >= `min_keep_area`, even with no nearby point.
+
+    The strict point-only rule discards real, well-segmented lesions whenever
+    the localization method has no point near them (a lesion far from any
+    point still gets zeroed out). The size condition is a deliberately crude
+    stand-in confidence signal: standalone evaluation (post_processing/) on
+    DRAC showed +0.026 mean Dice and rescued several fully-discarded lesions
+    at min_keep_area=2000px, at the cost of some additional false-positive
+    area from large-but-wrong components (no cheap secondary signal such as
+    shape or mean confidence reliably separated the two in that evaluation,
+    given how few components are ever above this size on the noisy TU
+    dataset -- so this only helps DRAC; leave it off for TU).
+    """
+    pred_np = pred_mask[0, 0].detach().cpu().numpy().astype(np.uint8)
+
+    labeled_mask, num_features = label(pred_np)
+    if num_features == 0:
+        return torch.zeros_like(pred_mask), None
+
+    img_points = points_df[points_df["image_number"] == image_name]
+    if img_points.empty:
+        return pred_mask, None
+
+    areas = ndimage.sum(pred_np, labeled_mask, index=np.arange(1, num_features + 1))
+    size_ok_ids = set((np.where(areas >= min_keep_area)[0] + 1).tolist())
+
+    ref_points = img_points[["y", "x"]].to_numpy(dtype=np.float64)
+    rows = np.rint(ref_points[:, 0]).astype(np.int64)
+    cols = np.rint(ref_points[:, 1]).astype(np.int64)
+    rows = np.clip(rows, 0, labeled_mask.shape[0] - 1)
+    cols = np.clip(cols, 0, labeled_mask.shape[1] - 1)
+    points_mask = np.zeros_like(pred_np, dtype=bool)
+    points_mask[rows, cols] = True
+    dist_map = distance_transform_edt(~points_mask)
+    within_radius_mask = dist_map <= radius_tolerance
+    hit_labels = labeled_mask[within_radius_mask]
+    point_ok_ids = set(np.unique(hit_labels[hit_labels > 0]).tolist())
+
+    keep_ids = point_ok_ids | size_ok_ids
+    if not keep_ids:
+        return torch.zeros_like(pred_mask), ref_points
+
+    clean_np = np.isin(labeled_mask, list(keep_ids)).astype(np.uint8)
     cleaned_tensor = torch.from_numpy(clean_np).unsqueeze(0).unsqueeze(0).to(pred_mask.device, dtype=pred_mask.dtype)
     return cleaned_tensor, ref_points
 
@@ -392,6 +465,7 @@ def evaluate_fold(
     model = get_model(
         device,
         model_name=args.model_name,
+        backbone=args.backbone,
         in_channels=1,
         out_channels=1,
     )
@@ -402,60 +476,40 @@ def evaluate_fold(
     fold_output_dir.mkdir(parents=True, exist_ok=True)
 
     image_metrics: list[dict[str, float]] = []
-    buffers: dict[int, dict[str, torch.Tensor | set[int]]] = {}
-
     with torch.no_grad():
         for batch in tqdm(test_loader, desc=f"Fold {fold} [Test]", leave=False):
             images = batch["image"].to(device, non_blocking=True)
             masks = batch["mask"].to(device, non_blocking=True)
             with torch.amp.autocast(device_type=device.type, enabled=bool(args.use_amp and device.type == "cuda")):
                 logits = get_logits(model, images)
+            if logits.shape[-2:] != images.shape[-2:]:
+                raise ValueError(
+                    f"Expected model output spatial size {tuple(images.shape[-2:])}, got {tuple(logits.shape[-2:])}"
+                )
             sample_ids = batch["sample_id"]
-            patch_ids = batch["patch_id"]
+            image_paths = batch["image_path"]
 
             for item_index, sample_id in enumerate(sample_ids):
                 sample_id_int = int(sample_id)
-                if sample_id_int not in buffers:
-                    buffers[sample_id_int] = {
-                        "input": torch.zeros((1, 1, SOURCE_SIZE, SOURCE_SIZE)),
-                        "mask": torch.zeros((1, 1, SOURCE_SIZE, SOURCE_SIZE)),
-                        "logits": torch.zeros((1, 1, SOURCE_SIZE, SOURCE_SIZE)),
-                        "patches": set(),
-                    }
+                full_input = images[item_index : item_index + 1].detach().cpu()
+                full_mask = masks[item_index : item_index + 1].detach().cpu()
+                full_logits = logits[item_index : item_index + 1].float().detach().cpu()
+                raw_pred = get_postprocessed_mask(full_logits, threshold=args.threshold)
 
-                buffer = buffers[sample_id_int]
-                full_input = buffer["input"]
-                full_mask = buffer["mask"]
-                full_logits = buffer["logits"]
-                patches = buffer["patches"]
-                assert isinstance(full_input, torch.Tensor)
-                assert isinstance(full_mask, torch.Tensor)
-                assert isinstance(full_logits, torch.Tensor)
-                assert isinstance(patches, set)
-
-                patch_id = int(patch_ids[item_index])
-                stitch_batch(
-                    images[item_index : item_index + 1].detach().cpu(),
-                    masks[item_index : item_index + 1].detach().cpu(),
-                    logits[item_index : item_index + 1].float().detach().cpu(),
-                    patch_id,
-                    full_input,
-                    full_mask,
-                    full_logits,
-                )
-                patches.add(patch_id)
-
-                if len(patches) == 4:
-                    raw_pred = get_postprocessed_mask(full_logits, threshold=args.threshold)
-
-                    final_pred = raw_pred
-                    ref_points = None
-                    if args.apply_nearby_filter:
-                        assert points_df is not None
-                        image_number = args.points_image_name_template.format(
-                            sample_id=sample_id_int,
-                            dataset=str(args.dataset).replace("dataset_", ""),
+                final_pred = raw_pred
+                ref_points = None
+                if args.apply_nearby_filter:
+                    assert points_df is not None
+                    image_number = Path(image_paths[item_index]).name
+                    if args.size_relaxed_filter:
+                        final_pred, ref_points = filter_by_points_or_size(
+                            pred_mask=raw_pred,
+                            image_name=image_number,
+                            points_df=points_df,
+                            radius_tolerance=args.radius_tolerance,
+                            min_keep_area=args.min_keep_area,
                         )
+                    else:
                         final_pred, ref_points = filter_by_representative_points(
                             pred_mask=raw_pred,
                             image_name=image_number,
@@ -463,26 +517,24 @@ def evaluate_fold(
                             radius_tolerance=args.radius_tolerance,
                         )
 
-                    metrics = compute_binary_mask_metrics(final_pred, full_mask)
-                    metrics["sample_id"] = float(sample_id_int)
-                    metrics["num_reference_points"] = float(0 if ref_points is None else len(ref_points))
-                    image_metrics.append(metrics)
+                metrics = compute_binary_mask_metrics(final_pred, full_mask)
+                metrics["sample_id"] = float(sample_id_int)
+                metrics["num_reference_points"] = float(0 if ref_points is None else len(ref_points))
+                image_metrics.append(metrics)
 
-                    save_visualization(
-                        image=full_input,
-                        target=full_mask,
-                        raw_pred=raw_pred,
-                        final_pred=final_pred,
-                        ref_points=ref_points,
-                        save_path=fold_output_dir / f"sample_{sample_id_int}.png",
-                        title=f"Fold {fold} Sample {sample_id_int}",
-                        apply_nearby_filter=args.apply_nearby_filter,
-                    )
+                save_visualization(
+                    image=full_input,
+                    target=full_mask,
+                    raw_pred=raw_pred,
+                    final_pred=final_pred,
+                    ref_points=ref_points,
+                    save_path=fold_output_dir / f"sample_{sample_id_int}.png",
+                    title=f"Fold {fold} Sample {sample_id_int}",
+                    apply_nearby_filter=args.apply_nearby_filter,
+                )
 
-                    del buffers[sample_id_int]
-
-                    if args.max_images_per_fold and len(image_metrics) >= args.max_images_per_fold:
-                        break
+                if args.max_images_per_fold and len(image_metrics) >= args.max_images_per_fold:
+                    break
 
             if args.max_images_per_fold and len(image_metrics) >= args.max_images_per_fold:
                 break
@@ -639,7 +691,10 @@ def summarize_all_datasets(
     output_dir = model_root / "dataset_summaries"
     output_dir.mkdir(parents=True, exist_ok=True)
     safe_suffix = setting_suffix.replace("/", "_")
-    output_name = safe_suffix if output_subdir == STANDARD_OUTPUT_DIR else f"{safe_suffix}_nearby"
+    if output_subdir == STANDARD_OUTPUT_DIR:
+        output_name = safe_suffix
+    else:
+        output_name = f"{safe_suffix}_{output_subdir.removeprefix('outputs_')}"
     write_csv(output_dir / f"{output_name}.csv", rows)
     (output_dir / f"{output_name}.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
     return rows
@@ -670,6 +725,8 @@ def main() -> None:
             raise FileNotFoundError(f"Could not find the representative points file: {points_path}")
         print(f"Loading representative localization points from: {points_path}")
         points_df = pd.read_csv(points_path)
+        if "image_number" not in points_df.columns and "image_name" in points_df.columns:
+            points_df = points_df.rename(columns={"image_name": "image_number"})
         required_columns = {"image_number", "x", "y"}
         missing_columns = sorted(required_columns - set(points_df.columns))
         if missing_columns:
@@ -680,12 +737,18 @@ def main() -> None:
     print(f"Experiment: {experiment_name}")
     print(f"Experiment directory: {experiment_dir}")
     print(f"Model: {args.model_name}")
+    print(f"Backbone: {args.backbone}")
     print(f"Device: {device}")
     print(f"Nearby filter: {'enabled' if args.apply_nearby_filter else 'disabled'}")
+    if args.apply_nearby_filter:
+        print(
+            f"Size-relaxed filter: {'enabled' if args.size_relaxed_filter else 'disabled'}"
+            + (f" (min_keep_area={args.min_keep_area})" if args.size_relaxed_filter else "")
+        )
 
     summaries: list[dict[str, float]] = []
-    output_subdir = get_output_subdir(args.apply_nearby_filter)
-    outputs_dir = get_outputs_dir(experiment_dir, args.apply_nearby_filter)
+    output_subdir = get_output_subdir(args.apply_nearby_filter, args.size_relaxed_filter)
+    outputs_dir = get_outputs_dir(experiment_dir, args.apply_nearby_filter, args.size_relaxed_filter)
     print(f"Output directory: {outputs_dir}")
     if not args.summary_only:
         for fold in range(1, int(args.k_folds) + 1):

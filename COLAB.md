@@ -74,6 +74,7 @@ Edit it in the Colab file browser, especially:
 ```toml
 dataset = "dataset_drac"
 model_name = "unet"
+backbone = "efficientnet-b3"
 base_dir = "."
 model_root = "/content/drive/MyDrive/rnv_pipeline/model"
 epochs = 100

@@ -6,6 +6,8 @@ albumentations
 opencv-python-headless
 numpy
 scipy
+xgboost
+pandas
 matplotlib
 tqdm
 pillow

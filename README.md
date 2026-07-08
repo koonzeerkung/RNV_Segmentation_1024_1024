@@ -2,6 +2,34 @@
 
 This project trains and evaluates a U-Net retinal vessel segmentation model on `dataset_tu` or `dataset_drac`.
 
+## Dataset Structure
+
+Datasets are **not included in this repo** (see `.gitignore`). Place them yourself, either as
+`dataset_tu` / `dataset_drac` at the repo root, or as `dataset/TU` / `dataset/DRAC`
+(the loader tries both, case-insensitively). Each dataset has a `raw/` (image) and `GT/` (mask)
+subfolder:
+
+```text
+dataset/
+  TU/
+    raw/          # 27 grayscale images, "nv (1).jpg" ... "nv (27).jpg"
+    GT/            # 27 masks,          "gt (1).tif" ... "gt (27).tif"
+  DRAC/
+    raw/          # 42 grayscale images, arbitrary numeric filenames e.g. "082.png"
+    GT/            # 42 masks with matching filenames,           e.g. "082.png"
+```
+
+- `dataset_tu`: 27 images, all 1024x1024, sample IDs 1-27 map directly to filenames
+  (`nv (N).jpg` / `gt (N).tif`).
+- `dataset_drac`: 42 images, all 1024x1024. Filenames are the *original* DRAC dataset IDs
+  (not renamed to 1..42), so sample ID -> file is resolved by **numeric sort position**
+  (1st file numerically = sample 1, etc.), not by matching the number in the filename.
+- Fold assignment (fixed, see `utils/dataloader.py::get_kfold_chunks`):
+  - `dataset_tu`: folds cover IDs 1-6, 7-12, 13-17, 18-22, 23-27
+  - `dataset_drac`: folds cover IDs 1-9, 10-18, 19-26, 27-34, 35-42
+  - For fold `n`: test = fold `n`, validation = fold `n+1` (wraps), train = remaining folds
+- Supported image extensions: `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tif`, `.tiff`.
+
 ## 1. Setup
 
 Use any Python environment with the required packages. Conda example:
@@ -36,6 +64,7 @@ Open [configs/default.toml](configs/default.toml) and edit the `[train]` section
 [train]
 dataset = "dataset_drac"
 model_name = "unet"
+backbone = "efficientnet-b3"
 epochs = 100
 batch_size = 8
 lr = 0.0001
