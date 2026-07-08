@@ -59,22 +59,9 @@ Fold layout is fixed:
 ### Model path
 `utils/model_factory.py::get_model()` builds a `segmentation_models_pytorch` model and wraps it in `WrappedModel`, which always returns `{"out": logits}`. Both `main.py` and `visualize_nearby.py` use an identical `get_logits()` helper that extracts `output["out"]` from the dict (or returns the tensor directly if the model doesn't return a dict).
 
-Supported architectures: `unet`, `unetplusplus`, `deeplabv3plus`, `deeplabv3`, `frnet`, `xgboost`.  
+Supported architectures: `unet`, `unetplusplus`, `deeplabv3plus`, `deeplabv3`.  
 Supported backbones: `efficientnet-b3`, `inceptionv4`, `densenet169`.  
 **Constraint**: DeepLab architectures only work with `efficientnet-b3`. Using `inceptionv4` or `densenet169` with DeepLab raises `ValueError` at model creation.
-
-`frnet` (`utils/frnet.py`) is a faithful reimplementation of FRNet (Ning et al., ICASSP 2024;
-official repo `github.com/nhjydywd/OCTA-FRNet`), the full-resolution OCTA vessel network whose
-TUH dataset is this project's `dataset_tu`. It has no backbone (field ignored) but is a normal
-gradient-trained CNN, so it uses the standard `run_fold` / `WrappedModel` path with **no special
-casing in `main.py`** — only `get_model`, backbone validation, and the experiment token skip the
-backbone. The official final layer is `Conv2d → Sigmoid → maxout` (outputs probabilities); the
-reimplementation drops the inner `Sigmoid` and takes the maxout over **logits** (identical result
-since sigmoid is monotonic), keeping it compatible with `BCEDiceLoss`/`get_postprocessed_mask`.
-It keeps full 1024×1024 resolution throughout (~5.4 GB/sample at AMP), so train with
-`batch_size=2 grad_accum_steps=4` (or `4`/`2`) rather than the default `bs=8`.
-
-`xgboost` (`utils/xgboost_segmenter.py`) is a per-pixel classifier, not an smp network. It has no backbone (the `backbone` field is ignored), trains in a single `fit()` call instead of the epoch loop, and runs on CPU. `main.py` detects it via `is_xgboost_model()` and routes each fold to `run_fold_xgboost()` instead of `run_fold()`; augmentation is forced off. Its `forward()` returns the same `{"out": logits}` dict (converting `P(foreground)` to log-odds), so `visualize_nearby.py` and `specify_visualize.py` need no changes. Its `state_dict()`/`load_state_dict()` are overridden to pickle the booster into a `uint8` tensor, keeping `torch.load(weights_only=True)` (torch ≥2.6 default) working.
 
 ### Loss and metrics path
 `utils/metrics.py`:

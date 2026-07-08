@@ -5,10 +5,8 @@
 
 [train]
 dataset = "drac"      # "dataset_tu", "dataset_drac", "tu", or "drac"
-model_name = "unet"        # "unet", "unetplusplus", "deeplabv3plus", "deeplabv3", "frnet", or "xgboost".
-backbone = "efficientnet-b3"  # "efficientnet-b3", "inceptionv4", or "densenet169". Ignored for "frnet"/"xgboost".
-# FRNet keeps full 1024x1024 resolution (~5.4 GB/sample at AMP). Use batch_size=2 grad_accum_steps=4
-# (or batch_size=4 grad_accum_steps=2) to fit GPU memory while keeping effective batch 8.
+model_name = "unet"        # "unet", "unetplusplus", "deeplabv3plus", or "deeplabv3".
+backbone = "efficientnet-b3"  # "efficientnet-b3", "inceptionv4", or "densenet169".
 augment = true
 aug_multiplier = 10
 base_dir = "."

@@ -23,7 +23,6 @@ from utils.dataloader import create_dataloaders
 from utils.metrics import BCEDiceLoss, compute_binary_metrics, dice_score_from_logits
 from utils.model_factory import (
     get_model,
-    is_xgboost_model,
     model_experiment_token,
     normalize_backbone_name,
     normalize_model_name,
@@ -640,148 +639,10 @@ def run_fold(
     }
 
 
-def run_fold_xgboost(
-    fold: int,
-    args: argparse.Namespace,
-    weights_dir: Path,
-    output_dir: Path,
-    experiment_name: str,
-) -> dict[str, Any]:
-    """Train and evaluate one fold with the XGBoost pixel classifier.
-
-    XGBoost trains in a single fit() call rather than a gradient-descent epoch loop,
-    so it bypasses the optimizer/scheduler/AMP machinery in run_fold. Augmentation is
-    not used (it is forced off in main() for honest experiment naming). The fold still
-    produces the same weights/history/summary artifacts as run_fold so visualization
-    and the k-fold summary work unchanged.
-    """
-
-    print(f"\n{'=' * 40}")
-    print(f"Starting fold {fold}/{args.k_folds} [XGBoost]")
-    print(f"{'=' * 40}")
-
-    # XGBoost runs on CPU; force a CPU device regardless of CUDA availability.
-    device = torch.device("cpu")
-
-    loaders = create_dataloaders(
-        dataset=args.dataset,
-        augment=False,
-        aug_multiplier=1,
-        fold=fold,
-        batch_size=args.batch_size,
-        base_dir=args.base_dir,
-        num_workers=args.num_workers,
-        include_metadata=False,
-        pin_memory=False,
-        persistent_workers=args.num_workers > 0,
-        prefetch_factor=2,
-    )
-    describe_loader_samples(loaders)
-
-    model = get_model(
-        device,
-        model_name=args.model_name,
-        backbone=args.backbone,
-        in_channels=1,
-        out_channels=1,
-    )
-    criterion = BCEDiceLoss(bce_weight=0.5, dice_weight=0.5)
-    best_model_path = weights_dir / f"{fold}.pth"
-
-    # Gather every training image/mask into memory for a single fit() call.
-    train_images: list[np.ndarray] = []
-    train_masks: list[np.ndarray] = []
-    for batch in loaders["train"]:
-        images = batch["image"].numpy()
-        masks = batch["mask"].numpy()
-        for sample_index in range(images.shape[0]):
-            train_images.append(images[sample_index, 0])
-            train_masks.append(masks[sample_index, 0])
-
-    fold_train_start = time.perf_counter()
-    model.fit(np.stack(train_images), np.stack(train_masks))
-    fit_elapsed_seconds = time.perf_counter() - fold_train_start
-
-    torch.save(model.state_dict(), best_model_path)
-
-    train_metrics = validate(
-        model=model,
-        loader=loaders["train"],
-        criterion=criterion,
-        device=device,
-        threshold=args.threshold,
-        use_amp=False,
-    )
-    val_metrics = validate(
-        model=model,
-        loader=loaders["validation"],
-        criterion=criterion,
-        device=device,
-        threshold=args.threshold,
-        use_amp=False,
-    )
-
-    best_metric_label = f"Val {format_metric_name(args.best_metric)}"
-    print(
-        f"Fold {fold} [XGBoost] | "
-        f"Train Loss: {train_metrics['loss']:.4f} | "
-        f"Train Dice: {train_metrics['dice']:.4f} | "
-        f"Val Loss: {val_metrics['loss']:.4f} | "
-        f"Val Dice: {val_metrics['dice']:.4f} | "
-        f"Val IoU: {val_metrics['iou']:.4f} | "
-        f"{best_metric_label}: {val_metrics[args.best_metric]:.4f} | "
-        f"elapsed: {format_elapsed_time(fit_elapsed_seconds)}"
-    )
-    print(f"Saved model: {best_model_path}")
-
-    # Single-entry history keeps save_history_plot/json and downstream tooling happy.
-    history: dict[str, list[float]] = {
-        "train_loss": [train_metrics["loss"]],
-        "train_dice": [train_metrics["dice"]],
-        **{f"val_{name}": [val_metrics[name]] for name in BEST_MODEL_METRICS},
-        "lr": [float(getattr(model, "learning_rate", args.lr))],
-        "epoch_elapsed_seconds": [fit_elapsed_seconds],
-        "best_model_saved_elapsed_seconds": [fit_elapsed_seconds],
-    }
-    save_history_plot(history, output_dir, experiment_name, fold)
-    save_history_json(history, output_dir, fold)
-    save_best_model_timing_json(
-        output_dir,
-        fold,
-        {
-            "fold": fold,
-            "epoch": 1,
-            "best_metric": args.best_metric,
-            "best_metric_mode": best_metric_mode(args.best_metric),
-            f"best_val_{args.best_metric}": float(val_metrics[args.best_metric]),
-            "best_model_path": str(best_model_path),
-            "best_model_saved_elapsed_seconds": fit_elapsed_seconds,
-            "best_model_saved_elapsed_hms": format_elapsed_time(fit_elapsed_seconds),
-        },
-    )
-
-    return {
-        "fold": float(fold),
-        "best_metric": args.best_metric,
-        "best_metric_mode": best_metric_mode(args.best_metric),
-        f"best_val_{args.best_metric}": float(val_metrics[args.best_metric]),
-        "best_model_saved_epoch": 1.0,
-        "best_model_saved_elapsed_seconds": float(fit_elapsed_seconds),
-        "best_model_saved_elapsed_hms": format_elapsed_time(fit_elapsed_seconds),
-        **{f"last_val_{name}": val_metrics[name] for name in BEST_MODEL_METRICS},
-    }
-
-
 def main() -> None:
     args = parse_args()
     ensure_conda_env(args.required_conda_env)
     set_seed(args.seed)
-
-    use_xgboost = is_xgboost_model(args.model_name)
-    if use_xgboost and args.augment:
-        # XGBoost ignores augmentation; force it off so the experiment name stays honest.
-        print("Note: augmentation is not used for the XGBoost model; disabling it for this run.")
-        args.augment = False
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     experiment_name = args.experiment_name or build_experiment_name(args)
@@ -814,27 +675,16 @@ def main() -> None:
     fold_summaries = []
     folds_to_run = [args.only_fold] if args.only_fold is not None else range(1, args.k_folds + 1)
     for fold in folds_to_run:
-        if use_xgboost:
-            fold_summaries.append(
-                run_fold_xgboost(
-                    fold=fold,
-                    args=args,
-                    weights_dir=weights_dir,
-                    output_dir=output_dir,
-                    experiment_name=experiment_name,
-                )
+        fold_summaries.append(
+            run_fold(
+                fold=fold,
+                args=args,
+                device=device,
+                weights_dir=weights_dir,
+                output_dir=output_dir,
+                experiment_name=experiment_name,
             )
-        else:
-            fold_summaries.append(
-                run_fold(
-                    fold=fold,
-                    args=args,
-                    device=device,
-                    weights_dir=weights_dir,
-                    output_dir=output_dir,
-                    experiment_name=experiment_name,
-                )
-            )
+        )
 
     summary_path = output_dir / "kfold_summary.json"
     summary_path.write_text(json.dumps(fold_summaries, indent=2), encoding="utf-8")
