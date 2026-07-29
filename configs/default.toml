@@ -4,14 +4,14 @@
 #   ./run_visualize.sh --config configs/my_experiment.toml --experiment-name <name>
 
 [train]
-dataset = "drac"      # "dataset_tu", "dataset_drac", "tu", or "drac"
-model_name = "unet"        # "unet", "unetplusplus", "deeplabv3plus", or "deeplabv3".
+dataset = "tu"      # "dataset_tu", "dataset_drac", "tu", or "drac"
+model_name = "deeplabv3"        # "unet", "unetplusplus", "deeplabv3plus", or "deeplabv3".
 backbone = "efficientnet-b3"  # "efficientnet-b3", "inceptionv4", or "densenet169".
 augment = true
 aug_multiplier = 10
 base_dir = "."
 k_folds = 5
-only_fold = 5        # uncomment to train just this fold (1-indexed) instead of all k_folds
+#only_fold = 5        # uncomment to train just this fold (1-indexed) instead of all k_folds
 epochs = 100
 batch_size = 8
 grad_accum_steps = 4           # Effective training batch is batch_size * grad_accum_steps.
@@ -28,19 +28,19 @@ best_metric = "dice"              # Best-model metric: loss, dice, iou, precisio
 seed = 69
 model_root = "model"
 required_conda_env = "rnv"        # Optional. Set to your conda preference only if you want to enforce that env.
-experiment_name = "drac_unet_effib3_t0.35"          # Empty string means auto-generate from config.
+experiment_name = "tu_deeplabv3_effib3_t0.35"          # Empty string means auto-generate from config.
 
 [visualize]
 dataset = "drac"
-model_name = "unet"   # Usually overwritten from model/<experiment_name>/config.json when available.
+model_name = "deeplabv3"   # Usually overwritten from model/<experiment_name>/config.json when available.
 backbone = "efficientnet-b3"   # Usually overwritten from model/<experiment_name>/config.json when available.
 base_dir = "."
 k_folds = 5
 batch_size = 8
-threshold = 0.3
+threshold = 0.5
 use_amp = true
 model_root = "model"
-experiment_name = "drac_unet_efficientnetb3"          # Empty string means auto-generate from config. Use the training experiment name.
+experiment_name = "drac_deeplabv3plus_efficientnetb3"          # Empty string means auto-generate from config. Use the training experiment name.
 required_conda_env = "rnv"        # Optional. Set to "eeg" only if you want to enforce that env.
 max_images_per_fold = 0       # 0 means visualize all test images.
 summarize_all_datasets = false
@@ -54,12 +54,10 @@ apply_nearby_filter = true
 # Set explicitly here only to override the per-dataset default.
 points_csv = ""
 points_image_name_template = ""
-radius_tolerance = 400     # Pixel radius around each representative point.
+radius_tolerance = 20     # Pixel radius around each representative point.
 
-# Only takes effect when apply_nearby_filter = true. Also keeps components with
-# area >= min_keep_area even without a nearby point, instead of discarding them outright.
-# Evaluated standalone in post_processing/filter_policy/: +0.026 mean Dice on DRAC at
-# min_keep_area=2000, but net negative on TU (too much background noise crosses the
-# size threshold) -- leave false for TU experiments.
-size_relaxed_filter = false
-min_keep_area = 3000
+# Which localizer point set the filter uses, and therefore which output directory it writes to:
+#   "multiple" -> every point the localizer emits, several per lesion  -> outputs_nearby_multiple
+#   "single"   -> one representative point per lesion (clustered)      -> outputs_nearby_single
+# Setting points_csv explicitly overrides this choice of file, but not the output directory.
+points_mode = "multiple"

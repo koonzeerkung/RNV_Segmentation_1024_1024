@@ -74,7 +74,9 @@ Supported backbones: `efficientnet-b3`, `inceptionv4`, `densenet169`.
 `run_fold()` handles one fold: creates dataloaders, builds model + Adam optimizer + `ReduceLROnPlateau` scheduler, then runs the epoch loop. AMP and gradient accumulation are on by default. Best model is saved by whichever `best_metric` is configured (`dice` by default). Early stopping fires after `patience` epochs with no improvement. History (loss, Dice, LR, elapsed times) is saved as JSON and PNG per fold.
 
 ### Evaluation loop (`visualize_nearby.py`)
-Loads each fold's `.pth` weights, rebuilds the test dataloader, runs inference at batch_size=1 (default), and writes visualization panels and per-image metrics to `outputs/test_fold_<fold>/`. Optional representative-point filtering (from a CSV of x,y coordinates) keeps only predicted blobs within `radius_tolerance` pixels of a known location; filtered results write to `outputs_nearby/` without overwriting normal results. A summary CSV/JSON across all folds is always written.
+Loads each fold's `.pth` weights, rebuilds the test dataloader, runs inference at batch_size=1 (default), and writes visualization panels and per-image metrics to `outputs/test_fold_<fold>/`. Optional representative-point filtering (from a CSV of x,y coordinates) keeps only predicted blobs within `radius_tolerance` pixels of a known location; filtered results write to `outputs_nearby_<points_mode>/` without overwriting normal results. A summary CSV/JSON across all folds is always written.
+
+`points_mode` selects which point set the filter uses, and hence the output directory: `multiple` (default) uses every point the localizer emits, several per lesion; `single` uses one clustered representative per lesion. The CSV for each mode/dataset pair is resolved in `utils/dataset_points.py::resolve_points_csv()`; setting `points_csv` explicitly overrides the file but not the directory.
 
 ### Experiment queue (`run_experiment_queue.py`)
 Iterates all requested dataset × model × backbone triples, skips invalid DeepLab combinations, skips already-completed experiments by default (checks for `test_metrics.json`), and serializes queue state to `model/experiment_queue_state.json`. Use `--continue-on-error` to keep going after failures.
@@ -94,7 +96,8 @@ model/
       test_fold_<fold>/                # visualization panels per image
       test_metrics.csv / .json
       test_metrics_summary.csv / .json
-    outputs_nearby/                    # same structure, nearby-filtered
+    outputs_nearby_multiple/           # same structure, filtered with all localizer points
+    outputs_nearby_single/             # same structure, filtered with one point per lesion
   dataset_summaries/
     <setting_suffix>.csv / .json       # combined tu+drac summary
   experiment_queue_state.json

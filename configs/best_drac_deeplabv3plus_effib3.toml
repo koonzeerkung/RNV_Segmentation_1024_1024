@@ -1,0 +1,49 @@
+# Rerun of BEST_drac_deeplabv3plus_efficientnetb3 with hole-filled ground truth.
+# Settings copied verbatim from model/BEST_drac_deeplabv3plus_efficientnetb3/config.json.
+
+[train]
+dataset = "drac"
+model_name = "deeplabv3plus"
+backbone = "efficientnet-b3"
+augment = true
+aug_multiplier = 10
+base_dir = "."
+k_folds = 5
+epochs = 200
+batch_size = 8
+grad_accum_steps = 4
+lr = 0.0001
+use_amp = true
+use_scheduler = true
+scheduler_factor = 0.5
+scheduler_patience = 5
+min_lr = 0.0000001
+patience = 25
+num_workers = 4
+threshold = 0.5
+best_metric = "dice"
+seed = 69
+model_root = "model"
+required_conda_env = "rnv"
+experiment_name = "BEST_drac_deeplabv3plus_efficientnetb3"
+
+[visualize]
+dataset = "drac"
+model_name = "deeplabv3plus"
+backbone = "efficientnet-b3"
+base_dir = "."
+k_folds = 5
+batch_size = 8
+threshold = 0.5
+use_amp = true
+model_root = "model"
+experiment_name = "BEST_drac_deeplabv3plus_efficientnetb3"
+required_conda_env = "rnv"
+max_images_per_fold = 0
+summarize_all_datasets = false
+summary_only = false
+setting_suffix = ""
+apply_nearby_filter = true
+points_csv = ""
+points_image_name_template = ""
+radius_tolerance = 20

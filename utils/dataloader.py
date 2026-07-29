@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 import torch
 from PIL import Image
+from scipy.ndimage import binary_fill_holes
 from torch.utils.data import DataLoader, Dataset
 
 
@@ -27,6 +28,13 @@ AFFINE_ROTATE_LIMIT = (-15, 15)
 AFFINE_SCALE_LIMIT = (0.9, 1.1)
 AFFINE_TRANSLATE_LIMIT = (-0.05, 0.05)
 AFFINE_SHEAR_LIMIT = (-5, 5)
+
+# Ground-truth masks are hole-filled with the same `binary_fill_holes` pass that
+# predictions already receive in `utils.metrics.get_postprocessed_mask`, so loss targets
+# and metric targets are postprocessed symmetrically with the predictions they score
+# against. TU GT gains +0.15% foreground px from this, DRAC +3.11% (lace-style tuft
+# annotation with genuine interstitial gaps). Set to False to restore raw GT.
+GT_FILL_HOLES = False
 
 SplitName = Literal["train", "validation", "test"]
 
@@ -296,6 +304,7 @@ class KFoldSliceDataset(Dataset):
         aug_multiplier: int = 1,
         mask_threshold: float = 0.5,
         include_metadata: bool = True,
+        gt_fill_holes: bool = GT_FILL_HOLES,
     ) -> None:
         if not samples:
             raise ValueError("KFoldSliceDataset requires at least one sample")
@@ -304,6 +313,7 @@ class KFoldSliceDataset(Dataset):
         self.augment_enabled = _is_augment_enabled(augment)
         self.aug_multiplier = int(aug_multiplier) if self.augment_enabled else 1
         self.mask_threshold = mask_threshold
+        self.gt_fill_holes = gt_fill_holes
         self.include_metadata = include_metadata
         self.train_augmentation = (
             build_train_augmentation(with_replay=include_metadata) if self.augment_enabled else None
@@ -399,9 +409,11 @@ class KFoldSliceDataset(Dataset):
         return torch.from_numpy(image_array).unsqueeze(0).contiguous()
 
     def _mask_to_tensor(self, mask_array: np.ndarray) -> torch.Tensor:
-        mask_array = mask_array.astype(np.float32) / 255.0
-        mask_array = (mask_array >= self.mask_threshold).astype(np.float32)
-        return torch.from_numpy(mask_array).unsqueeze(0).contiguous()
+        binary = (mask_array.astype(np.float32) / 255.0) >= self.mask_threshold
+        if self.gt_fill_holes:
+            # Applied after augmentation so nearest-neighbour affine artifacts get closed too.
+            binary = binary_fill_holes(binary)
+        return torch.from_numpy(binary.astype(np.float32)).unsqueeze(0).contiguous()
 
 
 def _make_loader(

@@ -13,7 +13,11 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 only.
     import tomli as tomllib  # type: ignore[no-redef]
 
-from utils.dataset_points import DATASET_POINTS_CSV, DATASET_POINTS_IMAGE_NAME_TEMPLATE
+from utils.dataset_points import (
+    DATASET_POINTS_CSV,
+    DATASET_POINTS_IMAGE_NAME_TEMPLATE,
+    DEFAULT_POINTS_MODE,
+)
 from utils.model_factory import normalize_backbone_name, normalize_model_name, validate_model_backbone
 
 
@@ -159,8 +163,13 @@ def get_nearby_filter(args: argparse.Namespace, config: dict[str, Any]) -> bool:
     return False
 
 
-def visualization_metrics_path(model_root: Path, experiment_name: str, nearby_filter: bool) -> Path:
-    output_dir = "outputs_nearby" if nearby_filter else "outputs"
+def visualization_metrics_path(
+    model_root: Path,
+    experiment_name: str,
+    nearby_filter: bool,
+    points_mode: str = DEFAULT_POINTS_MODE,
+) -> Path:
+    output_dir = f"outputs_nearby_{points_mode}" if nearby_filter else "outputs"
     return model_root / experiment_name / output_dir / "test_metrics.json"
 
 
