@@ -16,13 +16,13 @@ A 5-fold cross-validation segmentation pipeline for retinal vessel images. Two d
 ./run_visualize.sh --config configs/my_experiment.toml --experiment-name <name>
 
 # Preview the full architecture × backbone × dataset sweep without running
-./run_experiment_queue.sh --dry-run
+python run_experiment_queue.py --dry-run
 
 # Run the full queue (deeplabv3plus, unetplusplus, unet × 3 backbones × 2 datasets)
-./run_experiment_queue.sh
+python run_experiment_queue.py
 
 # Queue with extra training overrides passed through
-./run_experiment_queue.sh --train-arg=--epochs --train-arg=50
+python run_experiment_queue.py --train-arg=--epochs --train-arg=50
 
 # Cross-dataset summary for the same model setting on both datasets
 ./run_visualize.sh --config configs/my_experiment.toml --summary-only --summarize-all-datasets
@@ -31,7 +31,7 @@ A 5-fold cross-validation segmentation pipeline for retinal vessel images. Two d
 python specify_visualize.py model/<experiment_name>/weights/1.pth tu 1
 ```
 
-All shell scripts (`run_main.sh`, `run_visualize.sh`, `run_experiment_queue.sh`) optionally activate a conda environment if `PIPELINE_CONDA_ENV` is set, then delegate to the corresponding Python script. CLI arguments override the TOML config.
+`run_main.sh` and `run_visualize.sh` optionally activate a conda environment if `PIPELINE_CONDA_ENV` is set, then delegate to `main.py` / `visualize_nearby.py` respectively. Other entrypoints (`run_experiment_queue.py`, etc.) are invoked directly with `python`; set `PIPELINE_CONDA_ENV` and activate the env yourself first if needed. CLI arguments override the TOML config.
 
 ## Config System
 
