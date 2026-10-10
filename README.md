@@ -36,12 +36,12 @@ Use any Python environment with the required packages. Conda example:
 
 ```bash
 conda env create -f environment.yml
-conda activate eeg
+conda activate rnv
 ```
 
 If you already have a working environment, just install the dependencies from `environment.yml` or your preferred package manager.
 
-The pipeline does not require the environment to be named `eeg`.
+The pipeline does not require the environment to be named `rnv`.
 
 For Google Colab, use [COLAB.md](COLAB.md). Short version:
 
@@ -53,7 +53,7 @@ For Google Colab, use [COLAB.md](COLAB.md). Short version:
 Optional: if you want the helper scripts to activate a conda environment automatically, set:
 
 ```bash
-export PIPELINE_CONDA_ENV=eeg
+export PIPELINE_CONDA_ENV=rnv
 ```
 
 ## 2. Edit Config
@@ -150,15 +150,18 @@ For one specific image and one specific weight file, use `specify_visualize.py`.
 
 ## 5. Generate RNV Probability Heatmaps
 
-`generate_rnv_heatmaps.py` uses the two included EfficientNet-B3 U-Net models:
-`BEST_tu_unet_effib3_t0.35` and `BEST_drac_unet_effib3_t0.35`. A dataset input
-automatically uses its matching model (TU for TU, DRAC for DRAC) and averages
-that model's five cross-validation folds.
+`generate_rnv_heatmaps.py` uses two trained EfficientNet-B3 U-Net models:
+`model/BEST_tu_unet_effib3_t0.35` and `model/BEST_drac_unet_effib3_t0.35`.
+Trained weights are **not included in this repo** (`model/` is in `.gitignore`):
+train them with `main.py`, or place existing `weights/<fold>.pth` files in those
+folders. Use `--tu-model-dir` / `--drac-model-dir` to point elsewhere. A dataset
+input automatically uses its matching model (TU for TU, DRAC for DRAC) and
+averages that model's five cross-validation folds.
 
 For any 1024x1024 retinal image:
 
 ```bash
-conda activate eeg
+conda activate rnv
 python generate_rnv_heatmaps.py --image /path/to/image.png
 ```
 
