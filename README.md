@@ -148,6 +148,66 @@ When enabled, visualization keeps predicted connected components that are within
 
 For one specific image and one specific weight file, use `specify_visualize.py`. See [SPECIFY_VISUALIZE.md](SPECIFY_VISUALIZE.md) for the required parameters and output files.
 
+## 5. Generate RNV Probability Heatmaps
+
+`generate_rnv_heatmaps.py` uses the two included EfficientNet-B3 U-Net models:
+`BEST_tu_unet_effib3_t0.35` and `BEST_drac_unet_effib3_t0.35`. A dataset input
+automatically uses its matching model (TU for TU, DRAC for DRAC) and averages
+that model's five cross-validation folds.
+
+For any 1024x1024 retinal image:
+
+```bash
+conda activate eeg
+python generate_rnv_heatmaps.py --image /path/to/image.png
+```
+
+Or for an image from a project dataset:
+
+```bash
+python generate_rnv_heatmaps.py --dataset tu --sample-id 1
+python generate_rnv_heatmaps.py --dataset drac --sample-id 1
+```
+
+The default output is exactly one dark, color-scaled overlay PNG in
+`rnv_heatmaps/` (use `--output-dir` to change it):
+
+- `16_tu_rnv_probability_overlay.png` for `--dataset tu --sample-id 16`, for example.
+
+The heatmap uses a fixed color scale of `P(RNV) = 0` to `1`, and the fundus
+image underneath is deliberately darkened. Use `--models tu` or `--models drac`
+when supplying an image directly, `--folds 1,3,5` for a subset of folds, or
+`--save-probability-npy` to also save the float32 probability array. Every run
+also saves `*_rnv_prediction_mask.png`: the model's binary prediction after
+thresholding and hole filling.
+
+To display only the model probability inside an externally supplied binary
+region-of-interest mask, use `--roi-mask`. White pixels are kept and black
+pixels are hidden; masks are resized with nearest-neighbor interpolation when
+needed:
+
+```bash
+python generate_rnv_heatmaps.py --dataset tu --sample-id 27 --roi-mask /path/to/MASK.png
+```
+
+Add `--output-name my_heatmap` to choose the heatmap PNG filename.
+Use `--background-brightness 0.55` to control the raw-image intensity beneath
+the probability colors (`0` is black; `1` retains its original intensity).
+Use `--background-gamma` below `1` to brighten low-intensity vessel detail.
+
+To create one compact panel containing the raw image, probability heatmap, and
+the binary mask filtered with every unclustered localizer point, run:
+
+```bash
+python generate_rnv_heatmaps.py --dataset tu --sample-id 27 --compact-points-filter
+```
+
+This uses the dataset's `*_RNV_Points_Unclustered.csv` file, a probability
+threshold of `0.35`, and a 20-pixel component-to-point tolerance. Override
+these with `--mask-threshold` and `--radius-tolerance` when needed.
+It also writes `*_rnv_multiple_points_filtered_mask.png`: the final binary
+model mask after the multiple-points connected-component filter.
+
 ## Useful Overrides
 
 You can override config values from the command line:

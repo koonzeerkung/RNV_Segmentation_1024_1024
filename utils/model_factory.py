@@ -99,6 +99,7 @@ def get_model(
     backbone: str = "efficientnet-b3",
     in_channels: int = 1,
     out_channels: int = 1,
+    encoder_weights: str | None = "imagenet",
 ) -> nn.Module:
     normalized_name = normalize_model_name(model_name)
     normalized_backbone = normalize_backbone_name(backbone)
@@ -109,7 +110,7 @@ def get_model(
 
     model: nn.Module = model_class(
         encoder_name=normalized_backbone,
-        encoder_weights="imagenet",
+        encoder_weights=encoder_weights,
         in_channels=in_channels,
         classes=out_channels,
         activation=None,
